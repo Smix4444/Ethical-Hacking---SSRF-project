@@ -104,6 +104,21 @@ commando je typt*, *wat je zegt* (NL spreektekst), en *wat de kijker ziet*.
   willekeurig te proberen."
 - **Kijker ziet:** RECON → `blind SSRF CONFIRMED`, en de volledige keten tot LOOT.
 
+## 6b · DNS rebinding — de ultieme TOCTOU-test (~1 min)
+- **Toon:** de terminal.
+- **Commando:**
+  ```powershell
+  docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py rebind
+  ```
+- **Zeg:** "Tot slot de slimste aanval: DNS rebinding. Een filter dat de naam
+  controleert en dan de HTTP-client opnieuw laat resolven, wordt verslagen — kijk
+  naar de flip: query 1 is een veilig IP dat de check passeert, query 2 is het
+  interne metadata-IP waar de app dan mee verbindt. Mijn L2.5-niveau lekt daardoor
+  de creds. Maar mijn echte L3 resolvet één keer en pint op dat IP — die
+  blokkeert het. Dit is exact CVE-2024-24759 bij MindsDB, nu live in mijn lab."
+- **Kijker ziet:** `A query #1 -> 1.1.1.1`, `A query #2 -> 169.254.169.254`;
+  L2.5 = LOOT, L3 = BLOCKED.
+
 ## 7 · Afsluiten (~45s)
 - **Zeg:** "Samengevat: SSRF lukt moeiteloos zonder verdediging, filters en zelfs
   een WAF zijn te omzeilen, en enkel correcte validatie (resolve-then-pin) plus

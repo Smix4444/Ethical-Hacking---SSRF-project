@@ -73,7 +73,31 @@ When a target makes the request but returns no response, you confirm it
 
 ---
 
-## 4. The through-line
+## 4. MITRE ATT&CK mapping
+
+Beyond the Cyber Kill Chain (how the *toolkit* is organised), the key step maps
+cleanly onto **MITRE ATT&CK**:
+
+| Technique | Tactic | In our lab |
+|-----------|--------|-----------|
+| **T1552.005 — Cloud Instance Metadata API** (sub-technique of **T1552 Unsecured Credentials**) | Credential Access | The "loot" step: an SSRF reaches the metadata API at `169.254.169.254` and reads the instance's IAM credentials. |
+
+ATT&CK notes the metadata API lives at the fixed link-local `169.254.169.254`
+across providers, and that anyone who can reach the instance (e.g. via an SSRF
+flaw) can query it; tools such as **Peirates** and the **Hildegard** malware use
+this technique. The listed mitigations — **limit/limit access to the metadata
+API** and enforce access controls — are exactly our **IMDSv2** and
+**egress-filtering** layers.
+
+**DNS rebinding — now demonstrated live.** In Fase 8 we built a deterministic
+rebinding DNS (`rebind.lab`, TTL 0) and showed a TOCTOU "check-then-use" level
+(L2.5) being defeated by it — reaching the metadata creds — while **L3
+resolve-then-pin blocks it**. This is a live reproduction of the pattern behind
+**CVE-2024-24759 (MindsDB)**. See [../TESTVERSLAG.md](../TESTVERSLAG.md).
+
+*Source:* [MITRE ATT&CK — T1552.005](https://attack.mitre.org/techniques/T1552/005/)
+
+## 5. The through-line
 
 Across Capital One and every CVE above, the lesson our lab proves end-to-end:
 

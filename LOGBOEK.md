@@ -26,6 +26,44 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0009] — 2026-10-28 — DNS rebinding live: TOCTOU valt, resolve-then-pin houdt (Fase 8)
+
+**Fase:** 8
+
+**Wat probeerde ik?**
+Het Fase 3-restrisico (TOCTOU/DNS rebinding) eindelijk *live* aantonen. Een
+kleine deterministische rebinding-DNS gebouwd (`rebind.lab`, TTL 0: query #1 =
+veilig IP, query #2+ = intern `169.254.169.254`, met `/reset` en `/log`), de
+app-resolver ernaar laten wijzen (de DNS forwardt al de rest naar Docker zodat
+Fase 1-7 ongemoeid blijven — geverifieerd met een identieke L0-L3-matrix), en een
+bewust TOCTOU-kwetsbaar niveau **L2.5** toegevoegd (check-then-use). Daarna de
+aanval gedraaid via een nieuw `ssrfkit rebind`-subcommando.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+De DNS-log maakte het mechanisme tastbaar. Tegen **L2.5**: query #1 → `1.1.1.1`
+(de filter valideert dit als "veilig" en keurt goed), query #2 → `169.254.169.254`
+(de HTTP-client resolvet *opnieuw* bij connect en verbindt intern) → **de creds
+lekken**. Tegen onze **L3**: dezelfde hostnaam → maar L3 resolvet **één keer**,
+valideert dat IP, en **pint** erop — het resolvet nooit opnieuw, dus de "flip"
+krijgt geen kans → **BLOCKED: resolves to internal IP**. Het inzicht dat nu pas
+echt landt: het verschil zit niet in *wat* je valideert maar in de **kloof tussen
+controle en gebruik**. Elke verdediging die de naam na de check nog eens laat
+resolven (of een redirect volgt) heeft die kloof; resolve-then-pin sluit 'm per
+definitie omdat controle en verbinding naar hetzelfde, al-vastgelegde IP gaan.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit is exact **CVE-2024-24759 (MindsDB)** en het patroon in de CrewAI/LLaMA-
+Factory-advisories: valideer-één-keer, gebruik-de-naam-opnieuw. Ik heb het nu niet
+alleen *beschreven* maar *gereproduceerd* in het lab, met zichtbare flip en een
+heldere vergelijking (L2.5 = LOOT, L3 = BLOCKED). Qua verdediging bevestigt het
+waarom frameworks aanraden om op het **gevalideerde IP te verbinden** (pinnen) en
+geen her-resolutie/redirects toe te laten — en het koppelt aan MITRE **T1552.005**
+(Cloud Instance Metadata API). Eén eerlijke nuance blijft: pinnen voor https vergt
+een SNI-bewuste client, en een geavanceerde rebinding-race blijft theoretisch
+lastig — maar het check-then-use-gat zelf is hiermee dicht.
+
+---
+
 ## [0008] — 2026-10-27 — De grote slottest: alles draait, één verwachting bijgesteld (Fase 7A)
 
 **Fase:** 7A

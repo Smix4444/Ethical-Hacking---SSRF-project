@@ -91,7 +91,8 @@ assumptions:
 | **L0** — no protection | nothing | everything |
 | **L1** — naive string blocklist | the literal `169.254.169.254` | IP **encodings** (decimal/hex/octal), DNS names |
 | **L2** — parse host + decode IP ranges | **all** IP encodings | a **DNS name** that resolves inward, a **302 redirect** |
-| **L3** — resolve-then-pin + redirect re-validation | encodings **and** DNS **and** redirect | (app-level complete; see residual risks) |
+| **L2.5** — check-then-use (TOCTOU) | a statically-internal IP | **DNS rebinding** — validates "safe", re-resolves internal at connect (*demonstrated live*) |
+| **L3** — resolve-then-pin + redirect re-validation | encodings, DNS, redirect **and DNS rebinding** | (app-level complete; see residual risks) |
 | **WAF** — ModSecurity + OWASP CRS | **all IP-literal** payloads (`403`) | SSRF via a **hostname / redirect** — *the Capital One pattern* |
 | **IMDSv2** — token (`PUT`) required | a bare-GET SSRF to credentials (`401`) | not a cure — see residual risks |
 
@@ -108,6 +109,7 @@ a benign-looking hostname — exactly what happened at Capital One.
 | `exploit` | Exploitation | fire payloads at the app, with/without the WAF |
 | `loot` | Actions on Objectives | exfiltrate the (fake) IAM credentials |
 | `audit` | Defensive | check IMDSv1 vs IMDSv2 enforcement |
+| `rebind` | — | DNS rebinding: TOCTOU bypass (L2.5) vs L3 |
 | `full` | — | the whole chain as a guided demo |
 
 Details: [`toolkit/README.md`](toolkit/README.md).
@@ -161,6 +163,7 @@ level it mirrors. **Research only; nothing real was attacked.**
 ├── waf/                # ModSecurity + OWASP CRS (reverse proxy)
 ├── redirector/         # lab "attacker redirect" host (L2 bypass)
 ├── oob-listener/       # out-of-band callback collector (blind SSRF)
+├── dns-rebind/         # deterministic rebinding DNS (TOCTOU demo)
 ├── toolkit/            # ssrfkit CLI + ssrf_payloads / ssrf_scan / imds_check
 ├── docs/
 │   ├── TESTVERSLAG.md  # live end-to-end test report (evidence)

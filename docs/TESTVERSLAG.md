@@ -117,3 +117,36 @@ doen en strandt op 401, zelfs zonder enige app-bescherming.
 > zoals bedoeld. Geen bugs gevonden. Eén verwachting bijgesteld: de WAF blokkeert
 > IP-encodings sterker dan verwacht, maar wordt omzeild via een DNS-naam/redirect
 > — wat de defense-in-depth-boodschap net versterkt.
+
+---
+
+## Addendum — Fase 8: DNS rebinding (live)
+
+**Verwachting:** een "check-then-use" (TOCTOU) niveau is te verslaan met DNS
+rebinding; onze L3 (resolve-then-pin) niet.
+
+**Opzet:** rebinding-DNS `rebind.lab` (TTL 0): A-query #1 → `1.1.1.1` (veilig),
+#2+ → `169.254.169.254` (intern). App-resolver wijst ernaar; de DNS forwardt al
+de rest. Een regressietest bevestigde dat de L0-L3-matrix **identiek** bleef — de
+app-DNS-wijziging brak niets.
+
+**Echt resultaat** (`ssrfkit rebind`):
+
+```
+L2.5 (check-then-use):  LOOT via rebind — AccessKeyId=ASIAZ4LAB5EXAMPLE999
+  DNS flip:  A query #1 -> 1.1.1.1
+             A query #2 -> 169.254.169.254
+L3 (resolve-then-pin):  BLOCKED — L3: host 'rebind.lab' resolves to internal IP
+                        169.254.169.254 (blocked range).
+```
+
+| Niveau | Tegen de rebind-aanval |
+|--------|:--:|
+| L2.5 check-then-use | 💀 **LOOT** (creds gelekt via de flip) |
+| L3 resolve-then-pin | 🛡️ **BLOCKED** |
+
+**Oordeel:** ✅ **komt overeen.** De rebind verslaat het TOCTOU-niveau en wordt
+door L3 gestopt — een live reproductie van **CVE-2024-24759 (MindsDB)**. Niets
+week af van de verwachting.
+
+> **Eindoordeel incl. Fase 8: het hele lab werkt end-to-end — JA.** ✅
