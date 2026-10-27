@@ -4,9 +4,9 @@
 
 ### A hands-on Server-Side Request Forgery range — attack, defend, and understand
 
-*Flask target with tunable defenses · mock cloud metadata · ModSecurity WAF · a custom SSRF toolkit · mapped to the Cyber Kill Chain and real-world breaches*
+*Flask target with tunable defenses (L0–L3) · mock AWS metadata (IMDSv1/v2) · ModSecurity + OWASP CRS WAF · redirector & out-of-band listener · a custom kill-chain toolkit — wired to real breaches and CVEs*
 
-**Ethical Hacking course project · built entirely in Docker · 100% local**
+**Ethical Hacking course project · 100% local, Docker-only · verified end-to-end**
 
 </div>
 
@@ -21,141 +21,188 @@
 > - 🧪 Run it **only** on your own machine, on an isolated Docker network.
 > - 🌐 **Never** expose these services to the internet or any production system.
 > - 🔑 All credentials in this lab are **fake and invented** — they unlock nothing real.
-> - 🎯 Use the techniques shown here **only** against systems you own or have
->   **explicit written permission** to test. Unauthorized access is a crime.
+> - 🎯 Use these techniques **only** against systems you own or have **explicit
+>   written permission** to test. Unauthorized access is a crime.
+> - 🔬 The real-world analysis in [`docs/research/`](docs/research/README.md) is
+>   **research only — no real application was ever attacked.**
 >
 > Full ethics statement: **[SECURITY.md](SECURITY.md)**.
 
 ---
 
-## 🎯 Goal
+## 🎯 What this is
 
-Server-Side Request Forgery (SSRF) is an OWASP Top-10 class of vulnerability in
-which an attacker abuses a server into making requests *on their behalf* — often
-to internal systems the attacker could never reach directly. It is the exact bug
-class behind the **2019 Capital One breach**.
+SSRF (OWASP Top-10) is when an attacker abuses a server into making requests *on
+their behalf* — reaching internal systems they could never hit directly. It is
+the bug class behind the **2019 Capital One breach**.
 
-This project builds a complete, self-contained lab to understand SSRF from **both
-sides**:
+This lab studies SSRF from **both sides**, with every claim **verified live**
+(see [`docs/TESTVERSLAG.md`](docs/TESTVERSLAG.md)):
 
-- **Offense** — how SSRF is found (including *blind* SSRF), how filters and a WAF
-  are bypassed, and how it is escalated to read a cloud metadata endpoint.
-- **Defense** — how layered defenses (input validation, allowlisting, network
-  segmentation, a WAF) each raise the bar, and where each one still falls short.
+- **Offense** — find SSRF (incl. *blind* via out-of-band), bypass string
+  filters, parsers, and a WAF, and escalate to a cloud metadata endpoint.
+- **Defense** — watch each layer (blocklist → parser → resolve-then-pin → WAF →
+  IMDSv2) raise the bar, and see exactly where each one still falls short.
 
-Everything is wired to real-world context: the Capital One breach and recent CVEs.
-
-## 🏗️ Planned architecture
+## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
-    subgraph HOST["🧑‍💻 Operator workstation"]
-        TK["toolkit/<br/>SSRF scanner &amp; exploiter<br/>(Cyber Kill Chain)"]
+    OP["🧑‍💻 operator<br/>toolkit/ ssrfkit<br/>(Cyber Kill Chain)"]
+
+    subgraph LAB["🐳 Docker network ssrf-lab_ssrflab · 169.254.169.0/24 · isolated"]
+        WAF["waf<br/>ModSecurity + OWASP CRS<br/>:8090"]
+        APP["vulnerable-app<br/>Flask · L0–L3<br/>:8088"]
+        RED(["redirector<br/>preview-service.lab"])
+        OOB(["oob-listener<br/>oob-listener.lab"])
+        META["metadata-service<br/>169.254.169.254<br/>IMDSv1/v2 · FAKE creds<br/>metadata.lab · cdn-assets.lab"]
     end
 
-    subgraph LAB["🐳 Docker Compose lab network — isolated"]
-        WAF["waf/<br/>ModSecurity + OWASP CRS"]
-        APP["vulnerable-app/<br/>Flask target<br/>defense levels L0–L3"]
-        META["metadata-service/<br/>mock cloud metadata<br/>FAKE IAM credentials"]
-        OOB(["out-of-band listener<br/>blind-SSRF callbacks"])
-    end
-
-    TK -->|HTTP requests| WAF
-    WAF -->|filtered traffic| APP
-    APP -.->|SSRF attempt| META
+    OP -->|":8090 via WAF"| WAF --> APP
+    OP -->|":8088 direct"| APP
+    APP -.->|SSRF| META
+    APP -.->|302 redirect| RED -.-> META
     APP -.->|blind SSRF| OOB
-    TK -.->|receives callback| OOB
+    OP -.->|poll callback| OOB
 ```
 
-<details>
-<summary>Plain-text diagram (if Mermaid doesn't render)</summary>
+<details><summary>Plain-text diagram</summary>
 
 ```
-  Operator workstation                 Docker Compose lab network (isolated)
- ┌─────────────────────┐        ┌─────────────────────────────────────────────┐
- │  toolkit/           │  HTTP  │   waf/            vulnerable-app/             │
- │  SSRF scanner &     │ ─────▶ │  ModSecurity  ─▶  Flask target (L0–L3)        │
- │  exploiter          │        │  + OWASP CRS         │                        │
- │  (Cyber Kill Chain) │        │                      │ SSRF attempt           │
- │                     │        │                      ▼                        │
- │                     │        │              metadata-service/                │
- │                     │        │              mock metadata (FAKE creds)       │
- │                     │        │                      ▲                        │
- │                     │        │   out-of-band listener (blind-SSRF callbacks) │
- │                     │◀┄┄┄┄┄┄┄│┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘                        │
- └─────────────────────┘        └─────────────────────────────────────────────┘
+ operator (ssrfkit) ──:8090──▶ WAF (ModSecurity+CRS) ──┐
+ operator (ssrfkit) ──:8088──────────────────────────▶ vulnerable-app (L0–L3)
+                                     │ SSRF
+            ┌────────────────────────┼───────────────────────────┐
+            ▼                        ▼                            ▼
+   metadata-service        redirector (preview-        oob-listener
+   169.254.169.254          service.lab) ─302─▶ meta   (oob-listener.lab)
+   IMDSv1/v2, FAKE creds                                blind-SSRF callbacks
+   aliases metadata.lab, cdn-assets.lab
 ```
 </details>
 
-## 🧭 Roadmap — 7 phases
+## 🛡️ Defense layers — what each really stops (from the live test)
 
-| Phase | Focus | Component | Status |
-|:-----:|-------|-----------|:------:|
-| **0** | Project scaffolding, ethics & tooling hygiene | *this skeleton* | ✅ done |
-| **1** | Vulnerable Flask app with defense levels **L0–L3** | `vulnerable-app/` | ⬜ planned |
-| **2** | Mock cloud metadata service with **fake** IAM credentials | `metadata-service/` | ⬜ planned |
-| **3** | WAF layer: **ModSecurity + OWASP CRS** | `waf/` | ⬜ planned |
-| **4** | SSRF **toolkit**: detection (incl. blind/OOB), bypasses, metadata read — on the Cyber Kill Chain | `toolkit/` | ⬜ planned |
-| **5** | **Research dossier**: Capital One, recent CVEs, defenses | `docs/` | ⬜ planned |
-| **6** | **Demo** video + final report / presentation | `demo/` | ⬜ planned |
+Based on the real results in [`docs/TESTVERSLAG.md`](docs/TESTVERSLAG.md), not on
+assumptions:
+
+| Layer | Stops | Bypassed by |
+|-------|-------|-------------|
+| **L0** — no protection | nothing | everything |
+| **L1** — naive string blocklist | the literal `169.254.169.254` | IP **encodings** (decimal/hex/octal), DNS names |
+| **L2** — parse host + decode IP ranges | **all** IP encodings | a **DNS name** that resolves inward, a **302 redirect** |
+| **L3** — resolve-then-pin + redirect re-validation | encodings **and** DNS **and** redirect | (app-level complete; see residual risks) |
+| **WAF** — ModSecurity + OWASP CRS | **all IP-literal** payloads (`403`) | SSRF via a **hostname / redirect** — *the Capital One pattern* |
+| **IMDSv2** — token (`PUT`) required | a bare-GET SSRF to credentials (`401`) | not a cure — see residual risks |
+
+**Headline finding:** only **L3** (correct app logic) and **IMDSv2** (platform
+hardening) actually stopped the attack. The WAF helped but was walked around with
+a benign-looking hostname — exactly what happened at Capital One.
+
+## 🧰 The toolkit — `ssrfkit`, mapped to the Cyber Kill Chain
+
+| Subcommand | Kill-chain stage | Does |
+|------------|------------------|------|
+| `recon` | Reconnaissance | detect SSRF, incl. **blind** via an OOB callback |
+| `weaponize` | Weaponization | craft the bypass payloads |
+| `exploit` | Exploitation | fire payloads at the app, with/without the WAF |
+| `loot` | Actions on Objectives | exfiltrate the (fake) IAM credentials |
+| `audit` | Defensive | check IMDSv1 vs IMDSv2 enforcement |
+| `full` | — | the whole chain as a guided demo |
+
+Details: [`toolkit/README.md`](toolkit/README.md).
+
+## 🚀 Quickstart
+
+```
+docker compose up -d --build          # start all 5 services
+```
+- Vulnerable app, **direct**: <http://localhost:8088>
+- Vulnerable app, **through the WAF**: <http://localhost:8090>
+- Use the **Defense** dropdown to switch L0 → L3 live.
+
+```
+python toolkit/ssrf_scan.py           # L0–L3 results matrix
+python toolkit/ssrf_scan.py --compare # with vs without the WAF
+```
+```
+# full kill-chain, inside the lab network:
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
+```
+```
+docker compose down                   # stop & clean up
+```
+
+Full step-by-step (and the IMDSv2 flip) is in the
+[demo script](demo/DEMOVIDEO_SCRIPT.md) and [test report](docs/TESTVERSLAG.md).
+
+## 🎓 How this addresses the assignment feedback
+
+**(1) "Enough depth — don't stop at 'SSRF succeeded'; look at different defenses
+(filters *and* a WAF) and how they're bypassed."**
+The lab implements **four** escalating app-side defenses (L0–L3) **plus** a real
+**WAF** (ModSecurity + OWASP CRS) **plus** a platform control (**IMDSv2**), and
+demonstrates — live — the bypass of each weaker one (encodings, DNS, redirect)
+and why only L3 + IMDSv2 hold. See the defense table above and
+[`docs/TESTVERSLAG.md`](docs/TESTVERSLAG.md).
+
+**(2) "Test the relevance against real applications (without attacking them)."**
+The [reality dossier](docs/research/README.md) maps our lab onto **Capital One**
+and real CVEs (**CVE-2024-4084** AnythingLLM, **CVE-2024-29415** node-ip,
+**CVE-2024-24759** MindsDB, CrewAI, LLaMA-Factory) — each tied to the exact lab
+level it mirrors. **Research only; nothing real was attacked.**
 
 ## 📂 Repository layout
 
 ```
 .
-├── vulnerable-app/     # Phase 1 · Flask target (L0–L3)
-├── metadata-service/   # Phase 2 · mock metadata, fake IAM creds
-├── waf/                # Phase 3 · ModSecurity + OWASP CRS
-├── toolkit/            # Phase 4 · our SSRF detection/exploitation tool
-├── docs/               # Phase 5 · research dossier + diagrams
-│   ├── diagrams/
-│   └── research/
-├── demo/               # Phase 6 · demo video script & assets
-├── README.md           # you are here
+├── vulnerable-app/     # Flask target, defense levels L0–L3
+├── metadata-service/   # mock AWS metadata, IMDSv1/v2, FAKE IAM creds
+├── waf/                # ModSecurity + OWASP CRS (reverse proxy)
+├── redirector/         # lab "attacker redirect" host (L2 bypass)
+├── oob-listener/       # out-of-band callback collector (blind SSRF)
+├── toolkit/            # ssrfkit CLI + ssrf_payloads / ssrf_scan / imds_check
+├── docs/
+│   ├── TESTVERSLAG.md  # live end-to-end test report (evidence)
+│   └── research/       # reality dossier: Capital One + real CVEs
+├── demo/               # demo video script
+├── docker-compose.yml  # the whole lab, one command
 ├── LOGBOEK.md          # learning logbook (Dutch)
-├── SECURITY.md         # ethics / lab-only policy
-├── LICENSE             # educational-use-only license
-├── requirements.txt    # Python dependencies (per phase)
-├── .gitignore          # secrets / Docker / Python / OS junk
-├── .gitattributes      # force LF so files work inside Linux containers
-└── .editorconfig       # consistent formatting
+├── SECURITY.md · LICENSE
 ```
 
-## 🔒 How this lab stays safe
+## 🔑 Credentials & addresses (all fake, lab-only)
 
-- **Isolated by design** — all services run on a private Docker Compose network;
-  nothing is published to the public internet.
-- **Fake everything** — the "cloud credentials" are invented strings; they grant
-  no access to any real system.
-- **Named Docker volumes** — runtime data lives in Docker-managed volumes, *not*
-  bind-mounted into this (OneDrive-synced) folder.
-- **Secrets never committed** — `.gitignore` blocks `.env` and `*.local.md`; we
-  commit `*.example` templates only.
+| Item | Value |
+|------|-------|
+| App (direct / via WAF) | `http://localhost:8088` / `http://localhost:8090` |
+| Metadata (internal) | `169.254.169.254` — aliases `metadata.lab`, `cdn-assets.lab` |
+| Redirector / OOB (internal) | `preview-service.lab` / `oob-listener.lab` |
+| IAM role | `lab-ec2-demo-role` |
+| AccessKeyId | `ASIAZ4LAB5EXAMPLE999` |
+| SecretAccessKey | `wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY` |
 
-## 🗂️ Running in OneDrive — read this once
+> These are invented (they match AWS's public *example* values) and authenticate
+> to nothing. Real-valued secrets would live in git-ignored `*.local.md` / `.env`.
 
-This repo lives inside a OneDrive folder. OneDrive can fight with `.git` and with
-Docker data. Two habits keep it healthy:
+## ⚖️ Residual risks (honest limits)
 
-1. **Pause OneDrive sync** while doing heavy git or Docker work (OneDrive tray icon
-   → *Pause syncing*). Resume afterwards.
-2. **Push often** to your remote — it is your real backup if OneDrive ever mangles
-   a local file.
+- **L3 pinning** is implemented for HTTP; HTTPS needs an SNI-preserving pinning
+  adapter. A sophisticated TTL=0 DNS-rebinding race remains theoretically hard.
+- A **WAF** is pattern-based — good at obvious payloads, blind to benign-looking
+  hostnames/redirects.
+- **IMDSv2** is not a cure: it doesn't help if the app hands the attacker a full
+  HTTP client (PUT + headers), nor against already-leaked v1 credentials.
+- Takeaway: **defense-in-depth** — layers covering each other's blind spots.
 
-## 🔑 Credentials ledger
+## 🗂️ Running inside OneDrive
 
-Fake credentials created by the lab are tracked here as they are introduced, and
-also shown copy-ready in the working session.
-
-| Phase | Service | Username / Key | Secret / Password | Notes |
-|:-----:|---------|----------------|-------------------|-------|
-| 0 | — | — | — | No credentials created yet. |
-
-> Real-valued secret files (e.g. `*.local.md`, `.env`) are **git-ignored** and
-> never leave your machine.
+This repo lives in a OneDrive folder. **Pause OneDrive sync** during heavy git /
+Docker work, and **push often** (the remote is your real backup). Docker uses
+named volumes, so no heavy runtime data is synced.
 
 ---
 
 <div align="center">
-<sub>Built for learning. Hack what you own. 🛡️</sub>
+<sub>Built for learning. Hack what you own. 🛡️ · See <a href="docs/TESTVERSLAG.md">TESTVERSLAG</a> · <a href="LOGBOEK.md">LOGBOEK</a> · <a href="docs/research/README.md">reality dossier</a></sub>
 </div>
