@@ -37,11 +37,18 @@ services:
       # Default defense level when no ?level= is given. The UI dropdown overrides
       # it per request, so you can switch L0/L1/L2 live without a rebuild.
       DEFENSE_LEVEL: "0"
+    # Point the app's resolver at our rebinding DNS server. It answers rebind.lab
+    # with the TTL-0 flip and FORWARDS everything else to Docker's resolver, so
+    # all other names (metadata.lab, cdn-assets.lab, service names, internet)
+    # keep resolving exactly as before — the earlier phases are unaffected.
+    dns:
+      - 169.254.169.53
     networks:
       - ssrflab
     depends_on:
       - metadata-service
       - redirector
+      - dns-rebind
     restart: unless-stopped
 
   # ---- The mock cloud metadata service (the internal "crown jewel" target) --
@@ -89,6 +96,19 @@ services:
       ssrflab:
         aliases:
           - oob-listener.lab
+    restart: unless-stopped
+
+  # ---- Rebinding DNS (lab component): TTL-0 flip on rebind.lab for the TOCTOU demo
+  dns-rebind:
+    build: ./dns-rebind
+    container_name: ssrf-dns-rebind
+    # Static IP so the app can use it as its resolver; also aliased for the
+    # toolkit's HTTP control calls. No published host ports.
+    networks:
+      ssrflab:
+        ipv4_address: 169.254.169.53
+        aliases:
+          - dns-rebind.lab
     restart: unless-stopped
 
   # ---- WAF: ModSecurity v3 + OWASP Core Rule Set, reverse-proxying the app ---
