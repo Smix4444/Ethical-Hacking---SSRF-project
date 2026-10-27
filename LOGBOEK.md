@@ -26,6 +26,43 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0005] — 2026-10-27 — Een WAF ervoor: defense-in-depth, geen wondermiddel (Fase 4)
+
+**Fase:** 4
+
+**Wat probeerde ik?**
+Een WAF (ModSecurity v3 + OWASP CRS v4) als aparte reverse-proxy-service vóór de
+kwetsbare app zetten, als extra generieke laag. Via `docker-compose` draait de
+WAF op host-poort 8090 en proxyt naar `vulnerable-app:5000`; de directe poort
+8088 blijft bestaan zodat ik straks **met én zonder WAF** kan vergelijken. De
+scanner kreeg een `--compare`-modus (no-WAF vs via-WAF). Conform de nieuwe
+werkwijze: niet live gedraaid — enkel `py_compile` + `docker compose config`.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Het schrijven van de opzet maakte de rol van een WAF scherp: hij staat vóór de
+app en inspecteert *patronen* in requests, zonder de applicatielogica te kennen.
+Mijn verwachting (te verifiëren in Fase 7): de WAF vangt waarschijnlijk de
+letterlijke `169.254.169.254` (CRS heeft een SSRF-regelfamilie, REQUEST-934) en
+misschien `file://`, maar laat de alternatieve IP-encodings en een onschuldig
+ogende DNS-naam gewoon door — want dat zijn qua patroon doodnormale GET's. Het
+kerninzicht: een WAF verkleint het aanvalsoppervlak maar is **generiek en
+patroon-gebaseerd**, en dus géén vervanging voor correcte app-logica (onze L3).
+Defense-in-depth betekent lagen die elkaars gaten dekken, niet één magische muur.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit ligt angstaanjagend dicht bij **Capital One (2019)**: het gecompromitteerde
+component *was zelf een WAF* (ModSecurity op EC2). De SSRF ging er dwars doorheen
+naar het metadata-endpoint, haalde de IAM-credentials, en een te ruime IAM-rol
+gaf toegang tot vele S3-buckets (~100M records). Een aanwezige WAF "stopte" de
+aanval dus niet. Verdedigers zoals Fastly/Signal Sciences raadden toen aan om
+elk request te flaggen waar `169.254.169.254` in voorkomt — nuttig, maar die
+string-match faalt op encodings (precies wat onze L1→L2-reis al toonde). De juiste
+les: WAF + correcte app-logica (L3) + platformcontroles (IMDSv2, egress-filtering)
+samen. IMDSv2 is de volgende fase.
+(Bronnen enkel als research gelezen; niets aangevallen.)
+
+---
+
 ## [0004] — 2026-10-27 — De juiste verdediging: L3 "resolve-then-pin" (Fase 3)
 
 **Fase:** 3
