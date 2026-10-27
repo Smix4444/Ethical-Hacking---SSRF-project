@@ -25,7 +25,8 @@ import html
 import ipaddress
 import os
 import re
-from urllib.parse import quote, urlparse
+import socket
+from urllib.parse import quote, urljoin, urlparse, urlunparse
 
 import requests
 from flask import Flask, request, render_template_string
@@ -41,6 +42,9 @@ LEVELS = {
     2: ("L2 — Parsed host + scheme check", "Parses the hostname, allows only "
         "http/https, blocks internal IP ranges. But it trusts the URL as written "
         "and still follows redirects without re-checking."),
+    3: ("L3 — Resolve-then-pin (correct)", "Resolves the host, validates EVERY "
+        "resulting IP against internal ranges, pins the connection to that IP so "
+        "DNS cannot rebind, and re-validates every redirect hop."),
 }
 
 # Quick-demo example URLs shown as clickable chips in the UI.
@@ -142,11 +146,98 @@ def check_level_2(url):
 
 def apply_filter(url, level):
     """Return (allowed, reason). Reason is only meaningful when blocked."""
-    if level >= 2:
+    if level == 2:
         return check_level_2(url)
     if level == 1:
         return check_level_1(url)
-    return True, ""  # L0
+    return True, ""  # L0 (L3 has its own safe fetch, see below)
+
+
+# --------------------------------------------------------------------------- #
+#  L3 — the CORRECT defense: resolve-then-pin + per-hop redirect revalidation.  #
+#  This is what actually closes the Phase 2 bypasses. Each step is annotated    #
+#  with the specific bypass it defeats.                                         #
+# --------------------------------------------------------------------------- #
+
+class BlockedError(Exception):
+    """Raised when L3 refuses a URL for policy reasons (not a network error)."""
+
+
+def _is_blocked_ip(ip):
+    """True if an address is one we must never let the server reach."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped  # unwrap ::ffff:a.b.c.d so the IPv4 checks apply
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _resolve_and_validate(host, port):
+    """Resolve `host` and validate EVERY resulting address against internal
+    ranges, then return ONE validated IP to connect to (the "pin").
+
+    - Numeric hosts (any encoding) are canonicalised first, so 2852039166,
+      0xa9fea9fe, 0251.0376.0251.0376, [::ffff:169.254.169.254] etc. all reduce
+      to the same IP and are checked (defeats the L1 encoding bypass).
+    - DNS names are resolved and ALL answers are checked, so a name that points
+      to an internal IP (cdn-assets.lab) is rejected (defeats the L2 DNS bypass).
+    - We return a concrete IP so the caller connects to it directly; the name is
+      never resolved again at connect time (defeats DNS rebinding / TOCTOU)."""
+    literal = _host_to_ip(host)
+    if literal is not None:
+        if _is_blocked_ip(literal):
+            raise BlockedError(f"L3: host decodes to internal IP {literal} (blocked range).")
+        return str(literal)
+
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise requests.exceptions.ConnectionError(f"DNS resolution failed for {host}: {exc}")
+
+    addrs = []
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if _is_blocked_ip(ip):
+            raise BlockedError(f"L3: host '{host}' resolves to internal IP {ip} (blocked range).")
+        addrs.append(ip)
+
+    # Prefer an IPv4 for reliable container connectivity; pin to one address.
+    ipv4 = [a for a in addrs if a.version == 4]
+    return str((ipv4 or addrs)[0])
+
+
+def l3_fetch(url, max_redirects=5):
+    """SSRF-safe fetch. Raises BlockedError on policy refusal, RequestException
+    on network errors, otherwise returns the final requests.Response.
+
+    NOTE (honest residual limitation): pinning by rewriting the host to the IP
+    and carrying the Host header works for HTTP. For HTTPS it would break SNI /
+    certificate validation; a production implementation needs a pinning adapter
+    that keeps the original SNI. The lab targets are HTTP."""
+    current = url
+    for _ in range(max_redirects + 1):
+        parsed = urlparse(current)
+        if parsed.scheme not in ("http", "https"):
+            raise BlockedError(f"L3: scheme '{parsed.scheme or '(none)'}' not allowed (http/https only).")
+        host = (parsed.hostname or "").rstrip(".")
+        if not host:
+            raise BlockedError("L3: URL has no host.")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        ip = _resolve_and_validate(host, port)             # may raise BlockedError
+        netloc_ip = f"[{ip}]" if ":" in ip else ip         # bracket IPv6
+        pinned = urlunparse((parsed.scheme, f"{netloc_ip}:{port}",
+                             parsed.path or "/", parsed.params, parsed.query, parsed.fragment))
+
+        # Connect to the validated IP; keep the real Host header for vhosts.
+        # allow_redirects=False so we re-validate each hop ourselves.
+        resp = requests.get(pinned, headers={"Host": parsed.netloc},
+                            timeout=5, allow_redirects=False)
+        if resp.status_code in (301, 302, 303, 307, 308) and "Location" in resp.headers:
+            current = urljoin(current, resp.headers["Location"])  # re-validate next loop
+            continue
+        return resp
+
+    raise BlockedError("L3: too many redirects.")
 
 
 PAGE = """
@@ -290,8 +381,9 @@ PAGE = """
     </div>
 
     <p class="footer">
-      SSRF Lab · Phase 2 · Defenses here are <b>deliberately weak</b> for learning
-      only — see <code>SECURITY.md</code>. Never expose this app to the internet.
+      SSRF Lab · Phase 3 · L0–L2 are <b>deliberately weak</b>; L3 is the correct
+      resolve-then-pin defense. Learning only — see <code>SECURITY.md</code>.
+      Never expose this app to the internet.
     </p>
   </div>
 </body>
@@ -326,7 +418,7 @@ def _current_level():
         lvl = int(raw) if raw is not None else DEFAULT_LEVEL
     except ValueError:
         lvl = DEFAULT_LEVEL
-    return max(0, min(2, lvl))
+    return max(0, min(3, lvl))
 
 
 @app.route("/")
@@ -341,13 +433,27 @@ def fetch():
     if not url:
         return _render(level=level)
 
-    # Apply the configured (deliberately weak) defense before fetching.
+    # L3 does its own SSRF-safe fetch (resolve-then-pin + redirect revalidation).
+    if level >= 3:
+        try:
+            resp = l3_fetch(url)
+        except BlockedError as blocked:
+            return _render(url=url, level=level, blocked=str(blocked))
+        except requests.RequestException as exc:
+            return _render(url=url, level=level, error=f"{type(exc).__name__}: {exc}")
+        body = resp.text[:20000]
+        return _render(
+            url=url, level=level,
+            status=f"{resp.status_code} {resp.reason}",
+            content_type=resp.headers.get("Content-Type", "unknown"),
+            body=body,
+        )
+
+    # L0/L1/L2: deliberately weak string/parse filter, then a naive fetch that
+    # follows redirects blindly (the L2 flaw).
     allowed, reason = apply_filter(url, level)
     if not allowed:
         return _render(url=url, level=level, blocked=reason)
-
-    # ---- The fetch. allow_redirects=True is part of the L2 flaw: the final
-    # ---- destination after a redirect is never re-validated by the filter.
     try:
         resp = requests.get(url, timeout=5, allow_redirects=True)
         body = resp.text[:20000]  # cap so huge/binary responses stay readable
