@@ -26,7 +26,42 @@ welke mitigatie illustreert dit?>
 
 ---
 
-## [0007] — 2026-10-27 — Eén kill-chain-tool + blinde SSRF via OOB (Fase 6)
+## [0008] — 2026-10-27 — De grote slottest: alles draait, één verwachting bijgesteld (Fase 7A)
+
+**Fase:** 7A
+
+**Wat probeerde ik?**
+Voor het eerst het hele lab tegelijk live draaien (5 services) en de volledige
+testmatrix afwerken: app-niveaus L0-L3 zonder WAF, met/zonder WAF, de `ssrfkit`
+kill-chain (incl. blinde SSRF via OOB), en de IMDSv1→v2-schakeling. Echte
+resultaten vastgelegd in `docs/TESTVERSLAG.md`.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Alles werkte — geen enkele bug. Maar de WAF verraste me, en dát was het leerzaamst:
+ik verwachtte dat ModSecurity+CRS enkel de letterlijke `169.254.169.254` zou
+tegenhouden en de encodings zou doorlaten. In werkelijkheid blokkeerde de WAF
+**álle IP-gebaseerde payloads in elke encoding** (decimaal, hex, octaal,
+IPv6-mapped) met een 403 — sterker dan gedacht. Tegelijk liet hij de
+**hostnaam-gebaseerde** aanvallen gewoon door: de 302-redirect via
+`preview-service.lab` en de onschuldige DNS-naam `cdn-assets.lab` gaven via de
+WAF nóg steeds de creds op L0. Het inzicht: een WAF matcht patronen in het
+*verzoek*, niet de *bestemming* na resolutie/redirect. Hij is goed in "dit ziet
+eruit als een IP-SSRF", maar blind voor "dit is een nette hostnaam die toevallig
+naar binnen wijst". Een aanvaller ruilt gewoon het IP voor een naam en is er door.
+
+Tweede inzicht: de waarde van zelf live meten i.p.v. aannemen. Mijn Fase 4-
+verwachting was deels fout — niet omdat de code faalde, maar omdat de realiteit
+anders is. Dat is precies waarom je test.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit is de kern van **Capital One**: er stónd een WAF, en de SSRF ging er dwars
+doorheen. Mijn lab reproduceert dat nu letterlijk — de WAF stopt de voor de hand
+liggende IP-payloads, maar de aanval slaagt alsnog via een hostnaam/redirect. De
+enige lagen die de aanval écht stopten waren de correcte app-logica (**L3
+resolve-then-pin**, blokkeert ook redirect/DNS) en de platform-laag (**IMDSv2**,
+waar de kale GET op 401 strandt). Defense-in-depth is geen stapel losse muren maar
+lagen die elkaars blinde vlekken dekken — dat zie ik nu met echte output bewezen.
+
 
 **Fase:** 6
 
