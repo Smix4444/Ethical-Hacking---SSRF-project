@@ -1,32 +1,153 @@
 """
-SSRF Lab — Vulnerable App (Phase 1, defense level L0)
-=====================================================
+SSRF Lab — Vulnerable App (Phase 2: configurable defense levels L0 / L1 / L2)
+============================================================================
 ⚠️  INTENTIONALLY VULNERABLE.  LAB-ONLY.  Do NOT deploy anywhere public.
 
-This is a tiny "URL Preview Service": you paste a link and the server fetches
-it for you and shows a preview. That convenience feature is exactly where
-Server-Side Request Forgery (SSRF) lives: the *server* makes the request, so an
-attacker can point it at internal systems they could never reach directly —
-such as the cloud metadata endpoint at http://169.254.169.254/.
+A tiny "URL Preview Service": you paste a link and the server fetches it for
+you. That convenience feature is where Server-Side Request Forgery (SSRF) lives.
 
-Defense level L0 = NO protection at all. We validate nothing, block nothing.
-Later phases add L1–L3 and a WAF in front. See ../SECURITY.md.
+This phase adds *configurable, deliberately weak* defenses so we can study WHY
+naive filters fail — the whole point of building better ones later:
+
+  L0  No protection. Baseline.
+  L1  Naive blocklist on the raw URL string. Weak: checks the TEXT, not the
+      real destination, so alternate encodings / DNS names slip past.
+  L2  Parse the host, allow only http/https, block internal IP ranges. Better,
+      but still flawed: it trusts the URL *as written* and blindly follows
+      redirects, so it never re-checks the address it actually connects to
+      (the "parse-vs-fetch" / "check-vs-use" discrepancy).
+
+The active level comes from the ?level= query parameter (so you can switch live
+in the UI), falling back to the DEFENSE_LEVEL environment variable. Correct
+validation and a WAF arrive in later phases. See ../SECURITY.md.
 """
 import html
-from urllib.parse import quote
+import ipaddress
+import os
+import re
+from urllib.parse import quote, urlparse
 
 import requests
 from flask import Flask, request, render_template_string
 
 app = Flask(__name__)
 
+DEFAULT_LEVEL = int(os.environ.get("DEFENSE_LEVEL", "0"))
+
+LEVELS = {
+    0: ("L0 — No protection", "Every URL is fetched. Baseline vulnerability."),
+    1: ("L1 — Naive blocklist", "Rejects URLs containing blocked literal strings. "
+        "Checks the raw text, not the real destination."),
+    2: ("L2 — Parsed host + scheme check", "Parses the hostname, allows only "
+        "http/https, blocks internal IP ranges. But it trusts the URL as written "
+        "and still follows redirects without re-checking."),
+}
+
 # Quick-demo example URLs shown as clickable chips in the UI.
 EXAMPLES = [
     ("🌐 Normal page", "https://example.com/"),
     ("📂 Metadata root", "http://169.254.169.254/latest/meta-data/"),
-    ("🪪 IAM role name", "http://169.254.169.254/latest/meta-data/iam/security-credentials/"),
     ("🔑 IAM credentials", "http://169.254.169.254/latest/meta-data/iam/security-credentials/lab-ec2-demo-role"),
 ]
+
+# --------------------------------------------------------------------------- #
+#  Filters. Each is intentionally imperfect; the comments say exactly why.     #
+# --------------------------------------------------------------------------- #
+
+# L1: a blocklist of literal substrings. The flaw is right here: it matches the
+# TEXT of the URL. "http://169.254.169.254/" is caught, but any representation
+# that does not contain these exact strings (a decimal/hex IP, a DNS name that
+# resolves to the same host) sails straight through.
+BLOCKLIST_L1 = ["169.254.169.254", "localhost", "127.0.0.1", "0.0.0.0"]
+
+# L2: known-bad hostnames and a regex for "suspicious looking" ones. Still flawed
+# (see check_level_2): DNS names are never resolved, and redirects are followed
+# without re-validating the final target.
+BLOCKED_HOSTS_L2 = {"169.254.169.254", "localhost", "127.0.0.1", "0.0.0.0", "metadata"}
+SUSPICIOUS_RE_L2 = re.compile(r"169\.254\.|metadata", re.IGNORECASE)
+
+
+def _parse_octet(part):
+    """Parse one dotted part as decimal, hex (0x..) or octal (0..) — inet_aton
+    style. Raises ValueError on anything invalid."""
+    low = part.lower()
+    if low.startswith("0x"):
+        return int(part, 16)
+    if part.startswith("0") and len(part) > 1:
+        return int(part, 8)
+    return int(part, 10)
+
+
+def _host_to_ip(host):
+    """Best-effort: interpret a host literal as an IP given in various encodings
+    (dotted-decimal, integer, hex 0x…, octal 0…, dotted-hex/octal, IPv4-mapped
+    IPv6). Returns an ip_address or None. This is what lets L2 catch the
+    alternate-notation tricks that fool L1."""
+    # Direct forms, incl. IPv4-mapped IPv6 (::ffff:a.b.c.d -> a.b.c.d).
+    try:
+        ip = ipaddress.ip_address(host)
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+            return ip.ipv4_mapped
+        return ip
+    except ValueError:
+        pass
+    # Single integer: decimal, hex (0x..) or octal (0..).
+    try:
+        if host.lower().startswith("0x"):
+            return ipaddress.ip_address(int(host, 16))
+        if host.isdigit():
+            base = 8 if host.startswith("0") and len(host) > 1 else 10
+            return ipaddress.ip_address(int(host, base))
+    except ValueError:
+        pass
+    # Dotted form where each octet may be decimal/hex/octal.
+    parts = host.split(".")
+    if len(parts) == 4:
+        try:
+            octets = [_parse_octet(p) for p in parts]
+            if all(0 <= o <= 255 for o in octets):
+                return ipaddress.ip_address(".".join(str(o) for o in octets))
+        except ValueError:
+            pass
+    return None
+
+
+def check_level_1(url):
+    low = url.lower()
+    for bad in BLOCKLIST_L1:
+        if bad in low:
+            return False, f"L1 blocklist matched the literal string '{bad}' in the URL."
+    return True, ""
+
+
+def check_level_2(url):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, f"L2 allows only http/https schemes, not '{parsed.scheme or '(none)'}'."
+    host = (parsed.hostname or "").rstrip(".")
+    ip = _host_to_ip(host)
+    if ip is not None:
+        # It is an IP literal (in some encoding): block internal ranges.
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return False, f"L2: host decodes to internal IP {ip} (blocked range)."
+        return True, ""
+    # It is a DNS name. FLAW: we only pattern-match the name; we never resolve it,
+    # so a name that resolves to an internal IP is allowed. And because the real
+    # fetch follows redirects, the final destination is never re-checked here.
+    if host.lower() in BLOCKED_HOSTS_L2 or SUSPICIOUS_RE_L2.search(host):
+        return False, f"L2: host '{host}' looks internal/blocked."
+    return True, ""
+
+
+def apply_filter(url, level):
+    """Return (allowed, reason). Reason is only meaningful when blocked."""
+    if level >= 2:
+        return check_level_2(url)
+    if level == 1:
+        return check_level_1(url)
+    return True, ""  # L0
+
 
 PAGE = """
 <!doctype html>
@@ -56,12 +177,26 @@ PAGE = """
   }
   h1 { margin: 0 0 6px; font-size: 30px; }
   h1 .emoji { filter: saturate(1.3); }
-  .sub { color: var(--muted); margin: 0 0 26px; line-height: 1.5; }
+  .sub { color: var(--muted); margin: 0 0 22px; line-height: 1.5; }
   .card {
     background: var(--card); border: 1px solid var(--line);
     border-radius: 16px; padding: 22px; box-shadow: 0 20px 40px -24px #000;
   }
-  form { display: flex; gap: 10px; flex-wrap: wrap; }
+  .levelbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    padding: 12px 14px; margin-bottom: 18px; border-radius: 12px;
+    background: #0b1220; border: 1px solid var(--line);
+  }
+  .levelbar select {
+    padding: 8px 10px; border-radius: 8px; background: #0f172a;
+    color: var(--text); border: 1px solid var(--line); font-size: 14px;
+  }
+  .levelbar .desc { font-size: 13px; color: var(--muted); flex: 1 1 240px; }
+  .lvl-tag {
+    font-weight: 700; font-size: 13px; padding: 4px 10px; border-radius: 999px;
+    background: var(--accent2); color: #0b1220;
+  }
+  form.main { display: flex; gap: 10px; flex-wrap: wrap; }
   input[type=text] {
     flex: 1 1 320px; padding: 13px 15px; border-radius: 10px;
     border: 1px solid var(--line); background: #0b1220; color: var(--text);
@@ -92,27 +227,41 @@ PAGE = """
     padding: 16px; overflow: auto; max-height: 420px; font-size: 13px;
     line-height: 1.5; color: #cbd5e1; white-space: pre-wrap; word-break: break-word;
   }
-  .error {
-    background: #2a0f12; border: 1px solid #7f1d1d; color: #fecaca;
+  .error, .blocked {
     border-radius: 12px; padding: 14px 16px; font-size: 14px;
   }
+  .error { background: #2a0f12; border: 1px solid #7f1d1d; color: #fecaca; }
+  .blocked { background: #27200a; border: 1px solid #a16207; color: #fde68a; }
+  .ok-tag { color: var(--ok); font-weight: 700; }
   .footer { color: var(--muted); font-size: 12px; margin-top: 22px; line-height: 1.5; }
   code { background: #0b1220; padding: 1px 6px; border-radius: 6px; }
 </style>
 </head>
 <body>
   <div class="wrap">
-    <span class="lab-badge">⚠️ Lab only · Defense level L0</span>
+    <span class="lab-badge">⚠️ Lab only · {{ level_name|safe }}</span>
     <h1><span class="emoji">🔎</span> URL Preview Service</h1>
     <p class="sub">
       Paste any link and we'll fetch a quick preview on the server for you.
-      Handy for checking where a shortened link goes, previewing a webhook, and more.
     </p>
 
     <div class="card">
-      <form action="/fetch" method="get">
+      <!-- Defense level switcher (changes take effect immediately, no rebuild) -->
+      <form class="levelbar" action="/fetch" method="get">
+        <span class="lvl-tag">Defense</span>
+        <select name="level" onchange="this.form.submit()">
+          {% for lvl, (name, _d) in levels.items() %}
+            <option value="{{ lvl }}" {{ 'selected' if lvl == level else '' }}>{{ name }}</option>
+          {% endfor %}
+        </select>
+        <input type="hidden" name="url" value="{{ url|safe }}">
+        <span class="desc">{{ level_desc|safe }}</span>
+      </form>
+
+      <form class="main" action="/fetch" method="get">
         <input type="text" name="url" value="{{ url|safe }}"
                placeholder="https://example.com/page" autofocus>
+        <input type="hidden" name="level" value="{{ level }}">
         <button type="submit">Fetch preview</button>
       </form>
       <div class="chips">
@@ -123,10 +272,13 @@ PAGE = """
 
       {% if url %}
       <div class="result">
-        {% if error %}
+        {% if blocked %}
+          <div class="blocked"><b>🛡️ Blocked by filter:</b> {{ blocked|safe }}</div>
+        {% elif error %}
           <div class="error"><b>Could not fetch:</b> {{ error|safe }}</div>
         {% else %}
           <div class="meta">
+            <span class="ok-tag">✓ Fetched</span>
             <span><b>URL:</b> {{ url|safe }}</span>
             <span><b>Status:</b> {{ status|safe }}</span>
             <span><b>Content-Type:</b> {{ content_type|safe }}</span>
@@ -138,9 +290,8 @@ PAGE = """
     </div>
 
     <p class="footer">
-      SSRF Lab · Phase 1 · This service performs <b>no</b> validation on the URL
-      (level L0). That is intentional and for learning only — see
-      <code>SECURITY.md</code>. Never expose this app to the internet.
+      SSRF Lab · Phase 2 · Defenses here are <b>deliberately weak</b> for learning
+      only — see <code>SECURITY.md</code>. Never expose this app to the internet.
     </p>
   </div>
 </body>
@@ -148,10 +299,11 @@ PAGE = """
 """
 
 
-def _render(url="", status="", content_type="", body="", error=""):
-    """Render the page. Everything dynamic is HTML-escaped here, then marked
-    safe in the template, so a fetched page is shown as TEXT (never rendered)."""
-    chips = [(label, "/fetch?url=" + quote(href, safe="")) for label, href in EXAMPLES]
+def _render(url="", status="", content_type="", body="", error="", blocked="", level=0):
+    """Render the page. Everything dynamic is HTML-escaped here then marked safe,
+    so a fetched page is always shown as TEXT (never rendered)."""
+    name, desc = LEVELS.get(level, LEVELS[0])
+    chips = [(label, f"/fetch?level={level}&url=" + quote(href, safe="")) for label, href in EXAMPLES]
     return render_template_string(
         PAGE,
         url=html.escape(url),
@@ -159,44 +311,58 @@ def _render(url="", status="", content_type="", body="", error=""):
         content_type=html.escape(content_type),
         body=html.escape(body),
         error=html.escape(error),
+        blocked=html.escape(blocked),
+        level=level,
+        level_name=html.escape(name),
+        level_desc=html.escape(desc),
+        levels=LEVELS,
         chips=chips,
     )
 
 
+def _current_level():
+    raw = request.args.get("level")
+    try:
+        lvl = int(raw) if raw is not None else DEFAULT_LEVEL
+    except ValueError:
+        lvl = DEFAULT_LEVEL
+    return max(0, min(2, lvl))
+
+
 @app.route("/")
 def index():
-    return _render()
+    return _render(level=_current_level())
 
 
 @app.route("/fetch")
 def fetch():
+    level = _current_level()
     url = request.args.get("url", "").strip()
     if not url:
-        return _render()
+        return _render(level=level)
 
-    # ============================================================= #
-    #  THE VULNERABILITY (defense level L0)                          #
-    #  The user-controlled URL is fetched by the SERVER with ZERO    #
-    #  validation: no scheme check, no host allow/block list, no     #
-    #  blocking of internal / link-local addresses. This is what     #
-    #  lets an attacker reach http://169.254.169.254/ and read the   #
-    #  (fake) cloud credentials. Later phases will harden this.      #
-    # ============================================================= #
+    # Apply the configured (deliberately weak) defense before fetching.
+    allowed, reason = apply_filter(url, level)
+    if not allowed:
+        return _render(url=url, level=level, blocked=reason)
+
+    # ---- The fetch. allow_redirects=True is part of the L2 flaw: the final
+    # ---- destination after a redirect is never re-validated by the filter.
     try:
         resp = requests.get(url, timeout=5, allow_redirects=True)
         body = resp.text[:20000]  # cap so huge/binary responses stay readable
         return _render(
             url=url,
+            level=level,
             status=f"{resp.status_code} {resp.reason}",
             content_type=resp.headers.get("Content-Type", "unknown"),
             body=body,
         )
     except requests.RequestException as exc:
-        return _render(url=url, error=f"{type(exc).__name__}: {exc}")
+        return _render(url=url, level=level, error=f"{type(exc).__name__}: {exc}")
 
 
 if __name__ == "__main__":
-    # Bind on all interfaces inside the container; port 5000 is published
-    # to the host as 8080 by docker-compose. debug=False to avoid exposing
-    # the interactive Werkzeug debugger.
+    # Bind on all interfaces inside the container; port 5000 is published to the
+    # host as 8088 by docker-compose. debug=False to avoid the Werkzeug debugger.
     app.run(host="0.0.0.0", port=5000, debug=False)
