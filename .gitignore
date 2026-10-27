@@ -83,3 +83,7 @@ $RECYCLE.BIN/
 # ── OneDrive / Office temp leftovers ──
 *.tmp
 *~RF*.TMP
+
+# ── Generated pentest reports (regenerable via `ssrfkit report`) ──
+reports/*
+!reports/.gitkeep

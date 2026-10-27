@@ -1,0 +1,2 @@
+# Generated pentest reports land here (ssrfkit report --out ...).
+# The HTML/MD reports themselves are git-ignored; this keeps the folder in Git.

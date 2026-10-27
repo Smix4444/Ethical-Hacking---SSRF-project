@@ -30,6 +30,7 @@ Swap `full` for any subcommand. Standard library only — no installs needed.
 | `loot` | Actions on Objectives | Exfiltrates the fake IAM credentials via SSRF (and shows this fail cleanly under IMDSv2). |
 | `audit` | Defensive | Checks whether metadata enforces IMDSv1 or IMDSv2 (reuses `imds_check`). |
 | `rebind` | — | **DNS rebinding**: resets the `rebind.lab` DNS, runs the TOCTOU level (L2.5) → LOOT, then L3 → BLOCKED, showing the TTL-0 flip. |
+| `report` | — | Runs every check live and writes a **professional pentest scorecard** (HTML + Markdown): exec summary, findings with severity/evidence/remediation, kill-chain + MITRE ATT&CK, a live scorecard table. |
 | `full` | — | Runs recon → weaponize → exploit → loot as a guided demo. |
 
 Every subcommand supports `--help`, and common flags let you retarget:
@@ -53,6 +54,9 @@ docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-sl
 
 # DNS rebinding: TOCTOU level (L2.5) falls, L3 resolve-then-pin holds
 ... python /t/ssrfkit.py rebind
+
+# Generate the pentest scorecard (HTML + Markdown) into reports/
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" -v "${PWD}/reports:/out" python:3.12-slim python /t/ssrfkit.py report --out /out
 ```
 
 ## Underlying modules (reused, still runnable on their own)
