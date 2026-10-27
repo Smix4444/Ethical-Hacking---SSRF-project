@@ -49,6 +49,7 @@ PAYLOAD_LABELS = {
 }
 
 _BLOCK_RE = re.compile(r'<div class="blocked">.*?</b>\s*(.*?)</div>', re.S)
+_ERR_RE = re.compile(r'<div class="error">.*?</b>\s*(.*?)</div>', re.S)
 _PRE_RE = re.compile(r"<pre>(.*?)</pre>", re.S)
 _KEY_RE = re.compile(r'"AccessKeyId":\s*"([^"]+)"')
 
@@ -87,6 +88,10 @@ def _attack(base, level, url):
     if verdict == "BLOCKED":
         m = _BLOCK_RE.search(body)
         return {"verdict": "BLOCKED", "detail": htmllib.unescape(m.group(1).strip()) if m else ""}
+    if verdict == "ERROR":
+        # The app's own fetch failed (invalid/unreachable target) — NOT a defense.
+        m = _ERR_RE.search(body)
+        return {"verdict": "ERROR", "detail": htmllib.unescape(m.group(1).strip()) if m else ""}
     return {"verdict": verdict, "detail": ""}
 
 
@@ -207,13 +212,16 @@ PAGE = r"""<!doctype html>
     border-top:2px dashed var(--line);padding-top:4px;transition:.25s}
   .hero.leaked{color:var(--red);border-color:var(--red-ln);font-weight:650}
   .hero.blocked{color:var(--green);border-color:var(--green-ln);font-weight:650}
+  .hero.failed{color:var(--grey);border-color:var(--grey-ln);font-weight:650}
   /* outcome */
   .outcome{border-radius:10px;padding:12px 14px;margin-top:12px;border:1px solid var(--line);
     background:var(--panel2);font-size:13px}
   .outcome.leaked{background:var(--red-bg);border-color:var(--red-ln)}
   .outcome.blocked{background:var(--green-bg);border-color:var(--green-ln)}
+  .outcome.failed{background:var(--grey-bg);border-color:var(--grey-ln)}
   .outcome .hd{font-weight:650;font-size:14px}
   .outcome.leaked .hd{color:var(--red)}.outcome.blocked .hd{color:var(--green)}
+  .outcome.failed .hd{color:var(--grey)}
   .outcome .rs{color:var(--muted);margin-top:4px;font-size:12.5px;word-break:break-word}
   /* breakdown */
   .explain{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);
@@ -321,10 +329,10 @@ PAGE = r"""<!doctype html>
 
   <div class="legend">
     <span><span class="pill v-LOOT">LOOT</span> = <b>credentials leaked</b></span>
-    <span><span class="pill v-BLOCKED">BLOCKED</span> = stopped by the app filter</span>
+    <span><span class="pill v-BLOCKED">BLOCKED</span> = stopped by a defense (filter)</span>
     <span><span class="pill v-WAF-403">WAF-403</span> = stopped by the WAF</span>
     <span><span class="pill v-FETCHED">FETCHED</span> = fetched, but not credentials</span>
-    <span><span class="pill v-ERROR">ERROR</span> = request failed</span>
+    <span><span class="pill v-ERROR">ERROR</span> = <b>FAILED</b> technically — no defense involved</span>
   </div>
 
 <script>
@@ -382,18 +390,34 @@ async function launch(){
  const hero=$('hero');hero.className='hero';
  try{const r=await j(`/api/attack?level=${lvl}&payload=${encodeURIComponent(pl)}`);
   const oc=$('outcome');
-  if(r.verdict==='LOOT'){hero.className='hero leaked';hero.textContent='● LEAKED ●';
-   oc.className='outcome leaked';
-   oc.innerHTML=`<div class="hd">💀 CREDENTIALS LEAKED</div>
-    <div class="rs">Payload <code>${pl}</code> at <b>L${lvl}</b> reached the metadata service.
-    AccessKeyId = <code>${r.detail}</code></div>`;}
-  else{hero.className='hero blocked';hero.textContent='✕ BLOCKED';
-   oc.className='outcome blocked';
-   const what=r.verdict==='WAF-403'?'the WAF':'defense level L'+lvl;
-   oc.innerHTML=`<div class="hd">🛡️ BLOCKED &nbsp;<span class="pill v-${r.verdict}">${r.verdict}</span></div>
-    <div class="rs">Payload <code>${pl}</code> was stopped by ${what}.
-    ${r.detail?('Reason: '+r.detail):''}</div>`;}
- }catch(e){$('outcome').innerHTML='<span class="rs">request error</span>';}
+  if(r.verdict==='LOOT'){
+    hero.className='hero leaked';hero.textContent='● LEAKED ●';
+    oc.className='outcome leaked';
+    oc.innerHTML=`<div class="hd">💀 CREDENTIALS LEAKED</div>
+     <div class="rs">Payload <code>${pl}</code> at <b>L${lvl}</b> reached the metadata service.
+     AccessKeyId = <code>${r.detail}</code></div>`;
+  }else if(r.verdict==='BLOCKED'||r.verdict==='WAF-403'){
+    hero.className='hero blocked';hero.textContent='✕ BLOCKED';
+    oc.className='outcome blocked';
+    const what=r.verdict==='WAF-403'?'the WAF (ModSecurity/CRS)':'defense level L'+lvl;
+    oc.innerHTML=`<div class="hd">🛡️ BLOCKED BY A DEFENSE &nbsp;<span class="pill v-${r.verdict}">${r.verdict}</span></div>
+     <div class="rs">Payload <code>${pl}</code> was deliberately refused by ${what}.
+     ${r.detail?('Reason: '+r.detail):''}</div>`;
+  }else if(r.verdict==='ERROR'||r.verdict==='REQ-ERR'){
+    hero.className='hero failed';hero.textContent='… FAILED';
+    oc.className='outcome failed';
+    oc.innerHTML=`<div class="hd">⚙️ ATTACK FAILED (technical) &nbsp;<span class="pill v-ERROR">${r.verdict}</span></div>
+     <div class="rs">Payload <code>${pl}</code> did not resolve or connect — the request failed on its own
+     (invalid or unreachable target). <b>No defense was involved</b> at L${lvl}.
+     ${r.detail?('Detail: '+r.detail):''}</div>`;
+  }else{ // FETCHED — legitimate, non-credential response
+    hero.className='hero';hero.textContent='↩ FETCHED';
+    oc.className='outcome';
+    oc.innerHTML=`<div class="hd">↩ FETCHED (not credentials)</div>
+     <div class="rs">Payload <code>${pl}</code> returned a normal, non-credential response —
+     legitimate traffic, neither an exploit nor a block.</div>`;
+  }
+ }catch(e){$('outcome').className='outcome';$('outcome').innerHTML='<span class="rs">request error</span>';}
  $('fire').disabled=false;$('amsg').textContent='';
 }
 
