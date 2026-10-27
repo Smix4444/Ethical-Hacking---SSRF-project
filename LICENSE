@@ -1,0 +1,31 @@
+SSRF Lab — Educational Use License
+Copyright (c) 2026 Benchekroun Mohamed Rayan
+
+This repository contains INTENTIONALLY VULNERABLE software and offensive
+security tooling, created solely for education, authorized security training
+and defensive research in an isolated, local laboratory.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this material, to use, study, copy and modify it for those purposes,
+subject to the following conditions:
+
+  1. You run it ONLY in an isolated, local environment that you own or are
+     explicitly authorized to use.
+
+  2. You NEVER deploy it on a public, production, or internet-facing system,
+     and never expose its services to untrusted networks.
+
+  3. You use the techniques it demonstrates ONLY against systems you own or
+     have explicit, written permission to test.
+
+  4. You keep this notice and the accompanying SECURITY.md intact in any copy
+     or substantial portion of the material.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Unauthorized access to computer systems is illegal. See SECURITY.md.
