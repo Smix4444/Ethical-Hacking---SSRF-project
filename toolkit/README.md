@@ -1,70 +1,77 @@
-# toolkit/
+# toolkit/ — `ssrfkit`
 
-**Phase 4 (seeded in Phase 2).** Our own Python toolkit that detects and
-demonstrates SSRF against the lab app, organised along the **Cyber Kill Chain**.
+**Phase 4/6.** Our own SSRF toolkit for the lab, forged into one coherent CLI
+(`ssrfkit.py`) whose subcommands follow the **Cyber Kill Chain**. It reuses the
+individual modules underneath rather than duplicating them.
 
-## What's here now
+> ⚠️ **Lab-only.** Point this **exclusively** at the lab's own services. Using
+> these techniques against any system you do not own or lack written permission
+> to test is illegal. See [../SECURITY.md](../SECURITY.md).
+
+## The unified tool: `ssrfkit`
+
+`ssrfkit` is designed to run **inside** the lab network (so it can reach the
+internal services). With the lab running (`docker compose up`), from the repo
+root:
+
+```
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
+```
+
+Swap `full` for any subcommand. Standard library only — no installs needed.
+
+### Subcommands → Cyber Kill Chain
+
+| Subcommand | Kill-chain stage | What it does |
+|------------|------------------|--------------|
+| `recon` | Reconnaissance | Detects SSRF, including **blind** SSRF: makes the app call the OOB listener with a unique token and confirms the callback. |
+| `weaponize` | Weaponization | Generates the alternate IP-encoding bypass payloads (reuses `ssrf_payloads`). |
+| `exploit` | Exploitation / Delivery | Fires the payload set at the app **without** and **through** the WAF, reporting BLOCKED/FETCHED/LOOT/WAF-403 (reuses `ssrf_scan`). |
+| `loot` | Actions on Objectives | Exfiltrates the fake IAM credentials via SSRF (and shows this fail cleanly under IMDSv2). |
+| `audit` | Defensive | Checks whether metadata enforces IMDSv1 or IMDSv2 (reuses `imds_check`). |
+| `full` | — | Runs recon → weaponize → exploit → loot as a guided demo. |
+
+Every subcommand supports `--help`, and common flags let you retarget:
+`--app`, `--waf`, `--oob`, `--metadata`, `--metadata-ip`, `--level {0..3}`,
+`--no-color`.
+
+### Examples
+
+```
+# Full guided kill-chain demo at L0
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
+
+# Just confirm blind SSRF out-of-band
+... python /t/ssrfkit.py recon
+
+# Exploit matrix with/without WAF at level 1
+... python /t/ssrfkit.py exploit --level 1
+
+# Defensive: is IMDSv2 enforced?
+... python /t/ssrfkit.py audit
+```
+
+## Underlying modules (reused, still runnable on their own)
 
 | File | Purpose |
 |------|---------|
-| `ssrf_payloads.py` | Generates alternate IP encodings and candidate URLs to **test the lab's own filters**. No network activity — it only transforms an address you pass in. |
-| `ssrf_scan.py` | Fires the payloads at the lab app's `/fetch` across levels L0–L3 and prints a BLOCKED/FETCHED/LOOT matrix. Can also compare **no-WAF vs via-WAF**. Talks **only** to the lab app you point it at. Standard library only. |
-| `imds_check.py` | Audit-style check: probes a metadata endpoint with a plain IMDSv1 GET **and** the IMDSv2 PUT-token flow, and reports which mode it enforces. Standard library only. |
+| `ssrf_payloads.py` | Generates alternate IP encodings / candidate URLs. No network activity. |
+| `ssrf_scan.py` | Fires payloads at `/fetch` across L0–L3; matrix mode and `--compare` (no-WAF vs via-WAF). |
+| `imds_check.py` | Audits a metadata endpoint: IMDSv1 plain GET vs the IMDSv2 token flow. |
 
-### Generate payloads
+`ssrfkit` imports these — one source of truth, no duplication. They remain usable
+standalone (e.g. `python toolkit/ssrf_scan.py` from the host against `:8088`).
 
-```
-python toolkit/ssrf_payloads.py 169.254.169.254
-```
-
-It prints the dotted-decimal, trailing-dot, decimal-integer, hex, dotted-hex,
-dotted-octal and IPv6-mapped forms of the address, each as a ready URL. These
-all point at the same host at the socket layer — which is why a filter that
-inspects the *text* of a URL (the L1 blocklist) can be fooled.
-
-### Reproduce the comparison table
-
-With the lab running (`docker compose up`), from the repo root:
+### Standalone quick reference
 
 ```
-python toolkit/ssrf_scan.py
+python toolkit/ssrf_payloads.py 169.254.169.254          # list encodings
+python toolkit/ssrf_scan.py                              # L0-L3 matrix (host -> :8088)
+python toolkit/ssrf_scan.py --compare                    # no-WAF vs via-WAF
 ```
 
-It scans every payload against L0, L1, L2 and L3 and prints a matrix, so the
-whole "which payload works at which level" table reproduces in one command.
-`LOOT` means the fake credentials came back.
+## Realism note
 
-### Compare with vs without the WAF (Phase 4)
-
-```
-python toolkit/ssrf_scan.py --compare
-```
-
-Hits each payload directly (`--base`, default `:8088`, no WAF) and through the
-WAF edge (`--waf-base`, default `:8090`) at one level (default L0) and prints the
-two columns side by side. `WAF-403` means ModSecurity/CRS refused the request;
-anything else means it passed the WAF and reached the app.
-
-### Check IMDSv1 vs IMDSv2 (Phase 5)
-
-The metadata service has no host port, so run the checker from **inside** the
-lab network with the lab running. From the repo root:
-
-```
-docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/imds_check.py http://169.254.169.254
-```
-
-It reports whether the endpoint leaks creds to a plain GET (IMDSv1) or enforces
-the token dance (IMDSv2). Flip `IMDS_MODE` on the `metadata-service` in
-`docker-compose.yml` (`v1` ↔ `v2`) and re-run to see the difference.
-
-## Planned capabilities (later phases)
-
-- Detect SSRF, including **blind** SSRF via out-of-band (OOB) callbacks.
-- Automate the filter / WAF bypasses we do by hand.
-- Read the mock metadata service to prove impact (fake creds only).
-- Map each step to a Cyber Kill Chain stage for the report.
-
-> ⚠️ **Lab-only.** Point this tool **exclusively** at the lab targets in this
-> repository. Using it against any system you do not own or lack written
-> permission to test is illegal. See [../SECURITY.md](../SECURITY.md).
+The `recon` OOB check uses the internal `oob-listener` service. In a real
+engagement that role is an attacker-owned server such as **Burp Collaborator** or
+**interactsh**. Here everything stays inside the isolated lab.

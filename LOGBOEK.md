@@ -26,6 +26,51 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0007] — 2026-10-27 — Eén kill-chain-tool + blinde SSRF via OOB (Fase 6)
+
+**Fase:** 6
+
+**Wat probeerde ik?**
+De losse toolkit-scripts samensmeden tot één CLI (`toolkit/ssrfkit.py`) met
+subcommando's die de Cyber Kill Chain volgen (recon → weaponize → exploit → loot,
++ audit en een `full`-demo), door de bestaande modules te *hergebruiken* (niet
+dupliceren). En het ontbrekende stuk toevoegen: blinde SSRF-detectie via
+out-of-band (OOB), met een nieuwe interne lab-service `oob-listener`
+(`oob-listener.lab`) die callbacks per uniek token verzamelt. Niet live gedraaid;
+enkel `py_compile`, `docker compose config` en `--help` per subcommando.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Het bouwen van `recon` maakte het verschil tussen **in-band** en **blinde** SSRF
+concreet. Tot nu toe kreeg ik de respons (de creds) netjes terug — in-band. Maar
+in de echte wereld geeft een kwetsbaar endpoint vaak *niets* terug; dan weet je
+niet of je request vertrokken is. De OOB-truc lost dat op: laat de server een
+URL met een uniek token ophalen dat *jij* beheert, en kijk of jouw listener die
+callback ziet. Zo bevestig je SSRF zonder ooit een responsbody te zien. Twee
+dingen die ik nu pas echt snap: (1) detectie en exfiltratie zijn losse dingen —
+je kunt een lek *bevestigen* (recon/OOB) lang voordat je er iets bruikbaars mee
+*buitmaakt* (loot); en (2) een callback die enkel een DNS-lookup is (geen HTTP)
+telt óók als bewijs, want netwerkfilters blokkeren soms enkel de HTTP-hop.
+
+Het mappen op de **Cyber Kill Chain** (Lockheed Martin) hielp me gestructureerd
+denken als pentester i.p.v. willekeurig payloads te gooien: eerst *recon* (is het
+lek er?), dan *weaponize* (welke payload past bij welke verdediging?), dan
+*exploit* (afvuren, met/zonder WAF), dan *actions on objectives* (de creds).
+Elke fase heeft een eigen vraag en een eigen bewijs.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Blinde SSRF is precies waarom verdedigers niet mogen vertrouwen op "we zien toch
+geen datalek in de respons". PortSwigger's methode — een Collaborator-domein
+injecteren en out-of-band interacties monitoren — is de standaard-detectie in
+echte pentests; tools als Burp Collaborator en interactsh doen exact wat onze
+`oob-listener` nabootst. Verdedigingskant: dit onderstreept waarom **egress-
+filtering** (uitgaand verkeer beperken) zo belangrijk is — als de server geen
+callbacks naar buiten mag maken, verlies je als aanvaller je blinde-SSRF-kanaal,
+en als verdediger een hele klasse exfiltratie. Dat sluit aan op de IMDSv2/egress-
+lessen van de vorige fases.
+(Bronnen enkel als research gelezen; niets aangevallen.)
+
+---
+
 ## [0006] — 2026-10-27 — IMDSv2: de token-dans breekt de SSRF-keten (Fase 5)
 
 **Fase:** 5
