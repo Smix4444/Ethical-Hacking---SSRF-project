@@ -1,21 +1,23 @@
 # =============================================================================
-#  SSRF Lab — docker-compose  (Phase 1, defense level L0: no protections yet)
+#  SSRF Lab — docker-compose  (Phase 2: configurable defense levels L0/L1/L2)
 #
 #  Start everything in one go:   docker compose up --build
 #  Stop and clean up:            docker compose down
 #
 #  Topology
 #  --------
-#    browser (host) ──:8088──▶ vulnerable-app (Flask, L0)
-#                                     │  SSRF: the app fetches ANY URL you give it
-#                                     ▼
-#                         metadata-service @ 169.254.169.254:80
-#                         (mock AWS IMDS, FAKE credentials)
+#    browser (host) ──:8088──▶ vulnerable-app (Flask, L0/L1/L2)
+#                                     │  SSRF: the app fetches a URL you give it
+#                     ┌───────────────┼───────────────────────────┐
+#                     ▼               ▼                           ▼
+#        metadata-service    preview-service.lab           (alt IP encodings
+#        169.254.169.254:80  (redirector, 302 ──┐           all resolve to the
+#        alias metadata.lab                      └─▶ 169.254.169.254)
+#        (mock AWS IMDS, FAKE credentials)
 #
-#  The metadata service has NO published ports on purpose: it is reachable ONLY
-#  from inside the lab network, exactly like a real cloud metadata endpoint.
-#  That is what makes SSRF powerful — the app can reach it even though you,
-#  from the host, cannot.
+#  Only vulnerable-app publishes a host port. The metadata service and the
+#  redirector have NO published ports — reachable only from inside the lab, like
+#  a real internal network. That is what makes SSRF (and its bypasses) matter.
 # =============================================================================
 
 name: ssrf-lab
@@ -30,10 +32,15 @@ services:
       # local stacks grab it), so the lab defaults to 8088. If 8088 is also
       # busy, change ONLY the left number (e.g. "9080:5000") and browse there.
       - "8088:5000"
+    environment:
+      # Default defense level when no ?level= is given. The UI dropdown overrides
+      # it per request, so you can switch L0/L1/L2 live without a rebuild.
+      DEFENSE_LEVEL: "0"
     networks:
       - ssrflab
     depends_on:
       - metadata-service
+      - redirector
     restart: unless-stopped
 
   # ---- The mock cloud metadata service (the internal "crown jewel" target) --
@@ -45,6 +52,24 @@ services:
       ssrflab:
         # Pin the realistic AWS metadata IP so http://169.254.169.254/ "just works".
         ipv4_address: 169.254.169.254
+        # DNS names that resolve to the metadata IP. `metadata.lab` looks
+        # obviously suspicious (L2's regex catches it); `cdn-assets.lab` looks
+        # innocent (L2 allows it, never resolves it) — a DNS-based bypass,
+        # simulating an attacker domain whose A record points at the target.
+        aliases:
+          - metadata.lab
+          - cdn-assets.lab
+    restart: unless-stopped
+
+  # ---- Attacker redirector (lab component): innocent host that 302s inward ---
+  redirector:
+    build: ./redirector
+    container_name: ssrf-redirector
+    # NO published ports either — only the vulnerable app reaches it, by name.
+    networks:
+      ssrflab:
+        aliases:
+          - preview-service.lab
     restart: unless-stopped
 
 networks:
