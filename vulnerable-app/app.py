@@ -42,6 +42,9 @@ LEVELS = {
     2: ("L2 — Parsed host + scheme check", "Parses the hostname, allows only "
         "http/https, blocks internal IP ranges. But it trusts the URL as written "
         "and still follows redirects without re-checking."),
+    25: ("L2.5 — TOCTOU (check-then-use, VULNERABLE)", "Resolves and validates the "
+        "host, then hands the HOSTNAME to the HTTP client, which resolves AGAIN at "
+        "connect — defeated by DNS rebinding. Models the MindsDB/CrewAI bug."),
     3: ("L3 — Resolve-then-pin (correct)", "Resolves the host, validates EVERY "
         "resulting IP against internal ranges, pins the connection to that IP so "
         "DNS cannot rebind, and re-validates every redirect hop."),
@@ -240,6 +243,38 @@ def l3_fetch(url, max_redirects=5):
     raise BlockedError("L3: too many redirects.")
 
 
+def toctou_fetch(url):
+    """L2.5 — DELIBERATELY TOCTOU-VULNERABLE (check-then-use). Models the
+    MindsDB/CrewAI bug.
+
+    CHECK: resolve the host once and validate the IP looks safe.
+    USE:   hand the HOSTNAME back to requests, which RESOLVES AGAIN at connect.
+
+    With a rebinding DNS (TTL 0) the second resolution differs, so a name that
+    validated as safe reaches an internal IP. The fix is L3 (resolve-then-pin):
+    resolve once and connect to THAT IP, never re-resolving."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise BlockedError(f"L2.5: scheme '{parsed.scheme or '(none)'}' not allowed.")
+    host = (parsed.hostname or "").rstrip(".")
+    if not host:
+        raise BlockedError("L2.5: URL has no host.")
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+    # --- CHECK: one resolution, validate it ---
+    literal = _host_to_ip(host)
+    if literal is not None:
+        checked = literal
+    else:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        checked = ipaddress.ip_address(infos[0][4][0])
+    if _is_blocked_ip(checked):
+        raise BlockedError(f"L2.5: validated IP {checked} is internal (blocked).")
+
+    # --- USE: hand the HOSTNAME back; requests re-resolves at connect (the flaw) ---
+    return requests.get(url, timeout=5, allow_redirects=False)
+
+
 PAGE = """
 <!doctype html>
 <html lang="en">
@@ -418,6 +453,8 @@ def _current_level():
         lvl = int(raw) if raw is not None else DEFAULT_LEVEL
     except ValueError:
         lvl = DEFAULT_LEVEL
+    if lvl == 25:            # L2.5 — the deliberately TOCTOU-vulnerable level
+        return 25
     return max(0, min(3, lvl))
 
 
@@ -432,6 +469,22 @@ def fetch():
     url = request.args.get("url", "").strip()
     if not url:
         return _render(level=level)
+
+    # L2.5 — deliberately TOCTOU-vulnerable (check-then-use), for the rebind demo.
+    if level == 25:
+        try:
+            resp = toctou_fetch(url)
+        except BlockedError as blocked:
+            return _render(url=url, level=level, blocked=str(blocked))
+        except requests.RequestException as exc:
+            return _render(url=url, level=level, error=f"{type(exc).__name__}: {exc}")
+        body = resp.text[:20000]
+        return _render(
+            url=url, level=level,
+            status=f"{resp.status_code} {resp.reason}",
+            content_type=resp.headers.get("Content-Type", "unknown"),
+            body=body,
+        )
 
     # L3 does its own SSRF-safe fetch (resolve-then-pin + redirect revalidation).
     if level >= 3:
