@@ -134,6 +134,27 @@ services:
       - vulnerable-app
     restart: unless-stopped
 
+  # ---- Dashboard (lab component): read-only SOC-style view + button-driven demos
+  dashboard:
+    build: ./dashboard
+    container_name: ssrf-dashboard
+    ports:
+      # host 8099 -> container 5000. Its own port; change the left number if busy.
+      - "8099:5000"
+    volumes:
+      # Reuse the toolkit (ssrf_scan/imds_check) read-only — no duplicated logic.
+      - ./toolkit:/app/toolkit:ro
+    networks:
+      - ssrflab
+    depends_on:
+      - vulnerable-app
+      - metadata-service
+      - waf
+      - dns-rebind
+      - oob-listener
+      - redirector
+    restart: unless-stopped
+
 networks:
   ssrflab:
     driver: bridge
