@@ -23,8 +23,9 @@ With the lab running (`docker compose up -d --build`):
 
 | What you see | Driven by |
 |--------------|-----------|
-| Topology with a live attack path (red = LOOT, green = blocked) | `/api/attack?level=N` |
-| L0–L3 matrix, coloured | `/api/matrix` |
+| Topology + attack path; pick a **payload** and **level**, launch, and get one clear outcome (💀 LEAKED red / 🛡️ BLOCKED green) — no misleading counter | `/api/attack?level=N&payload=…` |
+| **"What does this level stop?"** — per-level leaks vs stopped lists, so switching L0→L3 shows each layer stops a *different* set | `/api/matrix` (+ `/api/payloads`) |
+| L0–L3 matrix with subtle verdict badges + a legend | `/api/matrix` |
 | WAF with vs without | `/api/waf` |
 | DNS-rebinding flip (q#1 safe → q#2 internal), L2.5 vs L3 | `/api/rebind` (+ dns-rebind `/log`) |
 | IMDSv1 vs IMDSv2 | `/api/imds` |
