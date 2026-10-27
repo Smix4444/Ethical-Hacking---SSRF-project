@@ -29,6 +29,7 @@ Swap `full` for any subcommand. Standard library only — no installs needed.
 | `exploit` | Exploitation / Delivery | Fires the payload set at the app **without** and **through** the WAF, reporting BLOCKED/FETCHED/LOOT/WAF-403 (reuses `ssrf_scan`). |
 | `loot` | Actions on Objectives | Exfiltrates the fake IAM credentials via SSRF (and shows this fail cleanly under IMDSv2). |
 | `audit` | Defensive | Checks whether metadata enforces IMDSv1 or IMDSv2 (reuses `imds_check`). |
+| `rebind` | — | **DNS rebinding**: resets the `rebind.lab` DNS, runs the TOCTOU level (L2.5) → LOOT, then L3 → BLOCKED, showing the TTL-0 flip. |
 | `full` | — | Runs recon → weaponize → exploit → loot as a guided demo. |
 
 Every subcommand supports `--help`, and common flags let you retarget:
@@ -49,6 +50,9 @@ docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-sl
 
 # Defensive: is IMDSv2 enforced?
 ... python /t/ssrfkit.py audit
+
+# DNS rebinding: TOCTOU level (L2.5) falls, L3 resolve-then-pin holds
+... python /t/ssrfkit.py rebind
 ```
 
 ## Underlying modules (reused, still runnable on their own)
