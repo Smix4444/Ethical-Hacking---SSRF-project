@@ -1,8 +1,8 @@
 # metadata-service/
 
-**Phase 1–2.** A mock cloud metadata service that imitates the *shape* of the
-AWS EC2 Instance Metadata Service (IMDSv1) at `http://169.254.169.254/`, using
-entirely **fake, invented IAM credentials**.
+**Phase 1–5.** A mock cloud metadata service that imitates the *shape* of the
+AWS EC2 Instance Metadata Service (IMDSv1 **and** IMDSv2) at
+`http://169.254.169.254/`, using entirely **fake, invented IAM credentials**.
 
 ## What's here
 
@@ -21,6 +21,27 @@ entirely **fake, invented IAM credentials**.
 | `/latest/meta-data/iam/security-credentials/` | the role name `lab-ec2-demo-role` |
 | `/latest/meta-data/iam/security-credentials/lab-ec2-demo-role` | **fake temporary IAM credentials (JSON)** |
 | `/latest/dynamic/instance-identity/document` | fake instance identity document |
+| `PUT /latest/api/token` | IMDSv2 session token (requires the TTL header) |
+
+## IMDS mode — v1 vs v2 (`IMDS_MODE` env)
+
+Switchable via the `IMDS_MODE` env var on the service in `docker-compose.yml`:
+
+| Mode | Behaviour |
+|------|-----------|
+| **`v1`** (default) | Legacy. A plain `GET` of any metadata path returns the data — a basic SSRF (a bare GET) steals the creds. Keeps Phases 1–4 working unchanged. |
+| **`v2`** | A metadata `GET` **without** a valid token → `401`. You must first `PUT /latest/api/token` with header `X-aws-ec2-metadata-token-ttl-seconds`, then resend the `GET` with header `X-aws-ec2-metadata-token: <token>`. |
+
+**Why it matters:** a basic SSRF primitive can only make a plain `GET`; it cannot
+do the `PUT`-then-header token dance. So in `v2` mode the credential-theft chain
+breaks *even at app level L0*. This is AWS's direct answer to Capital One.
+
+**Residual risk (honest):** IMDSv2 does **not** help if the app hands the attacker
+a full HTTP client that can send a `PUT` and custom headers, nor against already
+-leaked v1 credentials, nor certain proxy/redirect tricks. It is one layer, not a
+cure.
+
+Check which mode is active with `toolkit/imds_check.py` (see `../toolkit/README.md`).
 
 ## 🔑 The (fake) credentials served
 

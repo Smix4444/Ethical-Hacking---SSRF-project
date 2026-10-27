@@ -26,6 +26,43 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0006] — 2026-10-27 — IMDSv2: de token-dans breekt de SSRF-keten (Fase 5)
+
+**Fase:** 5
+
+**Wat probeerde ik?**
+De mock-metadata-service een schakelbare `IMDS_MODE=v1|v2` geven (default v1, zodat
+Fase 1-4 blijven werken). In v2-modus: een `GET` op de creds zonder geldig token
+→ 401; eerst `PUT /latest/api/token` met de TTL-header → token; daarna `GET` met
+`X-aws-ec2-metadata-token` → de (nep-)creds. Een audit-tool `toolkit/imds_check.py`
+gemaakt die beide flows probeert en rapporteert welke modus wordt afgedwongen.
+Niet live gedraaid; enkel `py_compile`, `docker compose config` en `--help`.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Het bouwen van de token-dans maakte concreet *waarom* IMDSv2 de aanval breekt:
+onze SSRF-primitief is een **kale GET** van een door de aanvaller opgegeven URL.
+Ze kan geen `PUT` sturen en geen custom header meegeven. Dus zelfs op L0 (geen
+enkele app-bescherming) loopt de aanval bij IMDSv2 dood op die eerste 401 — niet
+omdat de app slimmer werd, maar omdat de *bestemming* een interactie eist die een
+SSRF niet kan leveren. Dat is een heel ander verdedigingsmodel dan L1-L3 (die de
+input/bestemming filteren): hier verlegt de verdediging zich naar het protocol
+zelf. Eerlijk over het restrisico: IMDSv2 helpt níét als de kwetsbare app de
+aanvaller een volwaardige HTTP-client geeft die wél PUT+headers kan sturen, niet
+tegen al-gelekte v1-creds, en niet tegen bepaalde proxy-trucs — het is één laag.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+IMDSv2 is AWS' defense-in-depth-antwoord op precies de SSRF-naar-metadata-klasse
+waarvan **Capital One** het schoolvoorbeeld is. Mooi detail dat alles verbindt:
+AWS koos de `PUT`-eis bewust omdat uit analyse bleek dat de overgrote meerderheid
+van (open) **WAF's geen HTTP PUT doorlaat** — dus de token-dans faalt juist in de
+misconfiguratie die Capital One mogelijk maakte. IMDSv2 weigert ook tokens aan
+verzoeken met een `X-Forwarded-For`-header (open reverse proxies) en gebruikt een
+hop-limit (voor containers 2). Les: platform-hardening (IMDSv2) + correcte
+app-logica (L3) + netwerk/WAF samen — geen enkele laag alleen volstaat.
+(Autoritatieve bron: AWS Security Blog; enkel als research gelezen.)
+
+---
+
 ## [0005] — 2026-10-27 — Een WAF ervoor: defense-in-depth, geen wondermiddel (Fase 4)
 
 **Fase:** 4
