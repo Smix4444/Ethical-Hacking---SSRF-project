@@ -18,14 +18,17 @@ done naively, *is* an SSRF vulnerability.
 Set the default with the `DEFENSE_LEVEL` env var (compose); override live per
 request with the **UI dropdown** (`?level=`), so you can switch without a rebuild.
 
-| Level | Behaviour | Why it still fails |
-|-------|-----------|--------------------|
-| **L0** | No checks. | It is the baseline vulnerability. |
-| **L1** | Blocklist of literal substrings (`169.254.169.254`, `localhost`, …) on the raw URL. | It inspects the **text**, not the destination. Alternate IP encodings (decimal/hex/octal) and DNS names that resolve to the same host don't contain the blocked strings. |
-| **L2** | Parse the host; allow only `http`/`https`; block internal IP ranges (catches the encodings L1 missed). | It trusts the URL **as written** and **follows redirects** without re-checking. A DNS name it never resolves, or a `302` to the internal target, defeats it — the *parse-vs-fetch / check-vs-use* discrepancy. |
+| Level | Behaviour | Result |
+|-------|-----------|--------|
+| **L0** | No checks. | Baseline vulnerability — everything is fetched. |
+| **L1** | Blocklist of literal substrings (`169.254.169.254`, `localhost`, …) on the raw URL. | Fails: it inspects the **text**, not the destination. Alternate IP encodings (decimal/hex/octal) and DNS names don't contain the blocked strings. |
+| **L2** | Parse the host; allow only `http`/`https`; block internal IP ranges (catches the encodings L1 missed). | Fails: it trusts the URL **as written** and **follows redirects**. A DNS name it never resolves, or a `302` to the internal target, defeats it — the *parse-vs-fetch / check-vs-use* discrepancy. |
+| **L3** | **Resolve-then-pin:** resolve the host, validate **every** resulting IP against internal ranges, **pin** the connection to that IP (no re-resolution → no DNS rebinding), and **re-validate every redirect hop**. | Correct: blocks the direct IP, all encodings, the redirect and the DNS bypass, while legitimate hosts still work. |
 
-> The code comments in `app.py` mark each flaw inline. The "correct" validation
-> (resolve-then-pin, block on the *connected* IP, no auto-redirects) is Phase 3/4.
+> The code comments in `app.py` mark each flaw and each L3 defense step inline.
+> **Residual limits (honest):** pinning here covers HTTP (HTTPS needs an
+> SNI-preserving pinning adapter); and L3 only protects *this app* — the network
+> and the metadata service still need IMDSv2 + egress filtering (later phases).
 
 ## Run it
 

@@ -26,6 +26,55 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0004] — 2026-10-27 — De juiste verdediging: L3 "resolve-then-pin" (Fase 3)
+
+**Fase:** 3
+
+**Wat probeerde ik?**
+Een L3-niveau bouwen dat SSRF-bescherming doet zoals het hoort, en live bewijzen
+dat álle Fase 2-bypasses er niet meer doorkomen terwijl legitiem verkeer blijft
+werken. L3 doet: scheme-allowlist (enkel http/https) → hostnaam resolven → élk
+resulterend IP valideren tegen interne ranges → de verbinding **pinnen** op dat
+gevalideerde IP → redirects niet blind volgen maar elke hop hervalideren. Ook
+een toolkit-scanner (`ssrf_scan.py`) gemaakt die de hele vergelijkingstabel met
+één commando reproduceert.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+De vergelijkingstabel (L0–L3) maakte het visueel: L3 blokkeert de directe
+payload, álle encodings, de 302-redirect (`preview-service.lab` → intern IP) en
+de onschuldige DNS-naam (`cdn-assets.lab` → 169.254.169.254), terwijl
+`example.com` gewoon werkt. Het kerninzicht: het verschil tussen L2 en L3 is
+*wat* je valideert. L2 keurt de URL-string/host goed; L3 keurt het **IP goed
+waarmee je effectief verbindt** — en verbindt daar dan ook mee (pinnen), zodat
+DNS niet kan rebinden tussen controle en connect, en elke redirect-hop opnieuw
+door dezelfde poort moet. Je verschuift van "de input proberen te herkennen"
+(een wedloop die je verliest) naar "de bestemming bewijzen vóór je ernaartoe
+gaat".
+
+Even eerlijk over de grenzen van L3: pinnen werkt hier voor http; voor https
+breekt het SNI/cert-validatie (dan heb je een pinning-adapter nodig die de
+originele SNI bewaart). Een geavanceerde rebinding-race met TTL=0 blijft
+theoretisch lastig. En — het belangrijkste — L3 beschermt enkel déze app.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+App-niveau-verdediging alleen is onvoldoende: als één endpoint ooit een
+URL-fetch mist, ligt het metadata-endpoint weer open. Daarom is *defense in
+depth* nodig, en dat is precies wat de volgende fases dekken:
+- **IMDSv2** — vereist een sessietoken via een `PUT`-request, dus een kale
+  GET-only SSRF (zoals de onze, zoals Capital One) kan de creds niet meer halen.
+  Moet wel expliciet afgedwongen worden (`http_tokens=required`; audit met de
+  AWS Config-regel `ec2-imdsv2-check`).
+- **Netwerk-egress-filtering** en het blokkeren van `169.254.0.0/16` beperken de
+  blast radius als SSRF tóch lukt; een strak-geschopte instance-role lekt dan
+  minimale rechten.
+- OWASP-lijn: mitigeer SSRF met **allowlists, niet denylists** (denylists sneuvelen
+  op encodings/rebinding) — wat onze L1→L3-reis empirisch aantoont.
+
+(Bronnen puur als research gelezen; niets aangevallen. Autoritatief: de OWASP
+SSRF Prevention Cheat Sheet en AWS' IMDSv2-documentatie.)
+
+---
+
 ## [0003] — 2026-10-27 — Waarom blocklists falen: L1/L2 omzeild (Fase 2)
 
 **Fase:** 2
