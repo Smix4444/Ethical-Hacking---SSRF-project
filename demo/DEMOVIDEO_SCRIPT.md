@@ -1,0 +1,126 @@
+# 🎬 Demovideo-script — SSRF Lab (~7-9 min)
+
+Draaiboek voor een vloeiende demo. Verhaallijn: **de aanval lukt → de
+verdediging bouwt op → de kill-chain-tool**. Per segment: *wat je toont*, *welk
+commando je typt*, *wat je zegt* (NL spreektekst), en *wat de kijker ziet*.
+
+> Tip vooraf: open één PowerShell-venster in de repo-root en één browser. Zorg dat
+> Docker Desktop draait en dat je **OneDrive even pauzeert**. Alles is nep & lab-only.
+
+---
+
+## 0 · Intro (~30s)
+- **Zeg:** "Dit is mijn SSRF-lab voor Ethical Hacking. Server-Side Request Forgery
+  laat een server verzoeken doen namens de aanvaller — richting interne systemen
+  die je normaal nooit bereikt. Het is de kwetsbaarheid achter de Capital
+  One-hack. Ik laat de aanval zien én, belangrijker, hoe je hem laag per laag
+  tegenhoudt. Alles draait lokaal in Docker, alle credentials zijn verzonnen."
+
+## 1 · Het lab starten (~30s)
+- **Toon:** de terminal.
+- **Commando:**
+  ```powershell
+  docker compose up -d --build
+  docker compose ps
+  ```
+- **Zeg:** "Eén commando start vijf services: de kwetsbare app, een nep
+  AWS-metadata-service, een WAF, een redirector en een out-of-band listener."
+- **Kijker ziet:** vijf containers `Up`.
+
+## 2 · De aanval lukt — L0 (~1 min)
+- **Toon:** browser op **http://localhost:8088** (de "URL Preview Service", niveau L0).
+- **Commando (in het URL-veld plakken):**
+  ```
+  http://169.254.169.254/latest/meta-data/iam/security-credentials/lab-ec2-demo-role
+  ```
+- **Zeg:** "Dit is een onschuldig ogende 'preview'-functie. Maar ik geef haar het
+  interne cloud-metadata-adres, 169.254.169.254 — dat ik zelf nooit kan bereiken.
+  De server haalt het wél op… en geeft me de tijdelijke IAM-credentials terug.
+  Dat is exact wat bij Capital One gebeurde."
+- **Kijker ziet:** JSON met `ASIAZ4LAB5EXAMPLE999` — de buit.
+
+## 3 · De verdediging klimt — L0→L3 in één tabel (~1.5 min)
+- **Toon:** de terminal.
+- **Commando:**
+  ```powershell
+  python toolkit/ssrf_scan.py
+  ```
+- **Zeg:** "Nu zet ik vier verdedigingsniveaus naast elkaar. **L1** is een naïeve
+  blocklist — die blokkeert het letterlijke IP, maar ik omzeil het met het IP in
+  decimale of hex-vorm. **L2** decodeert die trucjes wél, maar ik omzeil het met
+  een redirect of een onschuldige DNS-naam. **L3** doet het juist: de hostnaam
+  resolven, het échte IP controleren, daarop pinnen, en redirects hervalideren —
+  die houdt álles tegen, terwijl gewoon verkeer blijft werken."
+- **Kijker ziet:** de matrix — LOOT schuift naar BLOCKED naarmate je naar L3 gaat;
+  `legit-example` blijft FETCHED.
+
+## 4 · De WAF-nuance (~1.5 min)
+- **Toon:** de terminal.
+- **Commando:**
+  ```powershell
+  python toolkit/ssrf_scan.py --compare
+  ```
+- **Zeg:** "Veel mensen denken: zet er een WAF voor en klaar. Kijk wat er gebeurt.
+  De WAF — ModSecurity met de OWASP Core Rule Set — blokkeert álle IP-vormen netjes
+  met een 403. Maar de aanval via een nette hostnaam of een redirect wandelt er
+  gewoon doorheen en haalt alsnog de creds. Dat is precies waarom Capital One
+  misging: er stónd een WAF. Een WAF is een extra laag, geen vervanging voor
+  correcte app-logica."
+- **Kijker ziet:** `via-WAF`-kolom: IP-payloads = WAF-403, maar `302-redirect` en
+  `dns-innocent` = LOOT.
+
+## 5 · De platform-laag — IMDSv2 (~1.5 min)
+- **Toon:** de terminal.
+- **Commando's:**
+  ```powershell
+  $env:IMDS_MODE="v2"; docker compose up -d metadata-service
+  ```
+  ```powershell
+  docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py loot
+  ```
+- **Zeg:** "AWS' eigen antwoord op Capital One was IMDSv2. Dat eist eerst een
+  token via een PUT-verzoek plus een header bij elke read. Een kale SSRF-GET kan
+  dat niet. Ik zet de metadata op IMDSv2 en voer exact dezelfde aanval opnieuw
+  uit…"
+- **Kijker ziet:** `No credentials returned … 401 - Unauthorized. IMDSv2 requires
+  a session token`.
+- **Zeg (afrondend) + commando:**
+  ```powershell
+  $env:IMDS_MODE="v1"; docker compose up -d metadata-service
+  ```
+  "De aanval strandt op 401 — zelfs zonder app-bescherming. Ik zet het weer terug."
+
+## 6 · De toolkit — hele kill chain in één run (~1.5 min)
+- **Toon:** de terminal.
+- **Commando:**
+  ```powershell
+  docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
+  ```
+- **Zeg:** "Tot slot mijn eigen tool, `ssrfkit`, die alles langs de Cyber Kill
+  Chain legt: **recon** — hier bevestig ik zelfs *blinde* SSRF out-of-band: de app
+  belt mijn listener met een uniek token, zonder dat ik de respons zie.
+  **weaponize** maakt de payloads, **exploit** vuurt ze af met en zonder WAF, en
+  **loot** haalt de creds. Zo denk je gestructureerd als pentester in plaats van
+  willekeurig te proberen."
+- **Kijker ziet:** RECON → `blind SSRF CONFIRMED`, en de volledige keten tot LOOT.
+
+## 7 · Afsluiten (~45s)
+- **Zeg:** "Samengevat: SSRF lukt moeiteloos zonder verdediging, filters en zelfs
+  een WAF zijn te omzeilen, en enkel correcte validatie (resolve-then-pin) plus
+  platform-hardening (IMDSv2) stoppen de aanval echt — defense-in-depth. Ik heb
+  dit ook gekoppeld aan echte CVE's en de Capital One-casus in mijn
+  reality-dossier, zonder ooit een echte applicatie aan te vallen."
+- **Commando:**
+  ```powershell
+  docker compose down
+  ```
+- **Kijker ziet:** de services netjes afgebroken.
+
+---
+
+### Opnametips
+- Zoom in op de terminal (lettergrootte omhoog) en op de JSON-buit in de browser.
+- Houd per segment de **rode draad** aan: *lukt het? → waarom? → hoe stop je het?*
+- Toon de matrix-tabellen even stil zodat de kijker LOOT→BLOCKED ziet verschuiven.
+- Noem minstens één keer expliciet "alles is nep en lab-only".
+- Totale richttijd: 7-9 minuten. Oefen de overgangen één keer droog.
