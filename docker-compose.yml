@@ -78,6 +78,18 @@ services:
           - preview-service.lab
     restart: unless-stopped
 
+  # ---- OOB listener (lab component): collects callbacks to detect blind SSRF -
+  oob-listener:
+    build: ./oob-listener
+    container_name: ssrf-oob-listener
+    # NO published ports — internal only, reachable as oob-listener.lab. The
+    # toolkit queries it from inside the lab network.
+    networks:
+      ssrflab:
+        aliases:
+          - oob-listener.lab
+    restart: unless-stopped
+
   # ---- WAF: ModSecurity v3 + OWASP Core Rule Set, reverse-proxying the app ---
   waf:
     # Official OWASP CRS image (ModSecurity v3 engine + CRS v4), nginx variant.
