@@ -1,12 +1,13 @@
 # =============================================================================
-#  SSRF Lab — docker-compose  (Phase 2: configurable defense levels L0/L1/L2)
+#  SSRF Lab — docker-compose  (Phase 4: WAF layer in front of the app)
 #
 #  Start everything in one go:   docker compose up --build
 #  Stop and clean up:            docker compose down
 #
-#  Topology
-#  --------
-#    browser (host) ──:8088──▶ vulnerable-app (Flask, L0/L1/L2)
+#  Topology — two ways in, so you can compare WITH vs WITHOUT the WAF
+#  ------------------------------------------------------------------
+#    browser (host) ──:8090──▶ waf (ModSecurity + OWASP CRS) ──┐
+#    browser (host) ──:8088──────────────────────────────────▶ vulnerable-app (Flask, L0-L3)
 #                                     │  SSRF: the app fetches a URL you give it
 #                     ┌───────────────┼───────────────────────────┐
 #                     ▼               ▼                           ▼
@@ -15,9 +16,9 @@
 #        alias metadata.lab                      └─▶ 169.254.169.254)
 #        (mock AWS IMDS, FAKE credentials)
 #
-#  Only vulnerable-app publishes a host port. The metadata service and the
-#  redirector have NO published ports — reachable only from inside the lab, like
-#  a real internal network. That is what makes SSRF (and its bypasses) matter.
+#  Only vulnerable-app (:8088) and the WAF (:8090) publish host ports. The
+#  metadata service and the redirector have NO published ports — reachable only
+#  from inside the lab. The WAF only proxies to the app, never to metadata.
 # =============================================================================
 
 name: ssrf-lab
@@ -70,6 +71,29 @@ services:
       ssrflab:
         aliases:
           - preview-service.lab
+    restart: unless-stopped
+
+  # ---- WAF: ModSecurity v3 + OWASP Core Rule Set, reverse-proxying the app ---
+  waf:
+    # Official OWASP CRS image (ModSecurity v3 engine + CRS v4), nginx variant.
+    # NOTE: ":nginx" is a ROLLING tag. Before the Phase 7 live test, pin a dated
+    # or -lts tag for reproducibility (see waf/README.md for how to find it).
+    image: owasp/modsecurity-crs:nginx
+    container_name: ssrf-waf
+    environment:
+      # Reverse-proxy target: the vulnerable app, by service name, inside the lab.
+      BACKEND: "http://vulnerable-app:5000"
+      PORT: "8080"                 # port nginx listens on INSIDE the container
+      MODSEC_RULE_ENGINE: "On"     # On = actively block (not DetectionOnly)
+      BLOCKING_PARANOIA: "1"       # CRS paranoia level 1 (fewer false positives)
+    ports:
+      # host 8090 -> WAF 8080. Browse here to go THROUGH the WAF; use :8088 to
+      # bypass it and hit the app directly. Change 8090 if it clashes.
+      - "8090:8080"
+    networks:
+      - ssrflab
+    depends_on:
+      - vulnerable-app
     restart: unless-stopped
 
 networks:
