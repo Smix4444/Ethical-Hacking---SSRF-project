@@ -26,6 +26,47 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0003] — 2026-10-27 — Waarom blocklists falen: L1/L2 omzeild (Fase 2)
+
+**Fase:** 2
+
+**Wat probeerde ik?**
+Twee bewust zwakke verdedigingen in de app bouwen (L1 = substring-blocklist,
+L2 = hostname parsen + scheme-check + interne-IP-check) met een live niveau-
+schakelaar (env `DEFENSE_LEVEL` + UI-dropdown via `?level=`), en voor elk niveau
+de omzeiling aantonen. Toolkit-seed geschreven (`toolkit/ssrf_payloads.py`) die
+alternatieve IP-notaties genereert, en een "attacker redirector" + onschuldige
+DNS-alias toegevoegd aan het lab. Alles live geverifieerd met `docker compose`.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+- **L1** blokkeert de letterlijke string `169.254.169.254`, maar `http://2852039166/`
+  (decimaal), `0xa9fea9fe` (hex), `0251.0376.0251.0376` (octaal) én de DNS-naam
+  `cdn-assets.lab` geven allemaal gewoon de nep-creds terug. De filter keek naar
+  de *tekst*, niet naar waar de request écht heen ging.
+- **L2** dicht die encodings (decodeert de host en blokkeert interne IP-ranges),
+  maar valt alsnog door twee gaten: een **302-redirect** vanaf een onschuldig
+  ogende host, en een **DNS-naam die L2 nooit opzoekt**. Het kerninzicht — de
+  *parse-vs-fetch / check-vs-use* discrepantie: L2 valideert de URL *zoals
+  ingegeven*, maar `requests` haalt een ander, intern adres op (na redirect of
+  DNS-resolutie) dat nooit opnieuw gecontroleerd wordt.
+- Grote les: een blocklist/parse-aanpak is fundamenteel een wedloop die je
+  verliest. De juiste verdediging valideert het IP waar je *effectief* mee
+  verbindt (resolve-then-pin), volgt geen redirects blind, en segmenteert het
+  netwerk. Dat bouwen we in Fase 3/4.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit is geen theorie — exact deze fouten zitten in recente software:
+- **CVE-2024-24759 (MindsDB)**: SSRF-bescherming te omzeilen via **DNS rebinding**
+  (validatie slaagt, daarna rebindt de naam naar een intern IP). Precies onze
+  "L2 resolvet de naam niet / hercontroleert niet"-fout.
+- Advisories bij **CrewAI** en **LLaMA-Factory** (2025): hun `validate_url` keurt
+  de URL één keer goed, maar de HTTP-library **volgt redirects en her-resolvet DNS
+  zonder hercontrole** → metadata-endpoints bereikbaar. Dat is letterlijk onze
+  redirect-bypass. Dit bewijst dat "we valideren toch de URL?" in productie
+  structureel misgaat. (Puur als research gelezen; niets aangevallen.)
+
+---
+
 ## [0002] — 2026-10-27 — Eerste end-to-end SSRF naar metadata (Fase 1)
 
 **Fase:** 1
