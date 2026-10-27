@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import html as htmllib
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -61,32 +62,60 @@ def probe(base: str, level: int, url: str, timeout: int = 12) -> str:
     try:
         with urllib.request.urlopen(f"{base}/fetch?{query}", timeout=timeout) as resp:
             return classify(resp.read().decode("utf-8", "replace"))
-    except Exception as exc:  # noqa: BLE001 — report any transport error compactly
-        return f"REQ-ERR"
+    except urllib.error.HTTPError as exc:
+        # A 403 at the edge is the WAF (ModSecurity/CRS) refusing the request.
+        return "WAF-403" if exc.code == 403 else f"HTTP-{exc.code}"
+    except Exception:  # noqa: BLE001 — report any transport error compactly
+        return "REQ-ERR"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Scan the LAB app across SSRF defense levels.")
-    parser.add_argument("--base", default="http://localhost:8088", help="lab app base URL")
-    parser.add_argument("--ip", default="169.254.169.254", help="target metadata IP")
-    parser.add_argument("--level", type=int, choices=[0, 1, 2, 3], help="single level (default: all)")
-    args = parser.parse_args()
-
-    levels = [args.level] if args.level is not None else [0, 1, 2, 3]
-    tests = payloads(args.ip)
+def _print_matrix(base: str, ip: str, levels: list[int]) -> None:
+    tests = payloads(ip)
     width = max(len(name) for name, _ in tests)
-
-    print(f"# SSRF Lab scan against {args.base}  (LAB-ONLY)")
-    header = "payload".ljust(width) + "  " + "".join(f"L{l:<8}" for l in levels)
+    print(f"# SSRF Lab scan against {base}  (LAB-ONLY)")
+    header = "payload".ljust(width) + "  " + "".join(f"L{lvl:<8}" for lvl in levels)
     print(header)
     print("-" * len(header))
     for name, url in tests:
         row = name.ljust(width) + "  "
         for lvl in levels:
-            row += probe(args.base, lvl, url).ljust(9)
+            row += probe(base, lvl, url).ljust(9)
         print(row)
-    print("\nLOOT = fake credentials returned · BLOCKED = filter refused · "
-          "FETCHED = fetched non-creds · ERROR = fetch failed")
+
+
+def _print_compare(base: str, waf_base: str, ip: str, level: int) -> None:
+    """Side-by-side: same payloads, same level, hitting the app directly (no WAF)
+    vs through the WAF edge. Shows what the WAF adds — and what slips past it."""
+    tests = payloads(ip)
+    width = max(len(name) for name, _ in tests)
+    print(f"# SSRF Lab WAF comparison at L{level}  (LAB-ONLY)")
+    header = "payload".ljust(width) + "  " + "no-WAF".ljust(10) + "via-WAF"
+    print(header)
+    print("-" * len(header))
+    for name, url in tests:
+        print(name.ljust(width) + "  " + probe(base, level, url).ljust(10) + probe(waf_base, level, url))
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Scan the LAB app across SSRF defense levels.")
+    parser.add_argument("--base", default="http://localhost:8088", help="lab app base URL (bypasses WAF)")
+    parser.add_argument("--waf-base", default="http://localhost:8090", help="WAF edge base URL")
+    parser.add_argument("--ip", default="169.254.169.254", help="target metadata IP")
+    parser.add_argument("--level", type=int, choices=[0, 1, 2, 3], help="single level (default: all)")
+    parser.add_argument("--compare", action="store_true",
+                        help="compare no-WAF vs via-WAF at one level (default L0)")
+    args = parser.parse_args()
+
+    if args.compare:
+        _print_compare(args.base, args.waf_base, args.ip,
+                       args.level if args.level is not None else 0)
+    else:
+        _print_matrix(args.base, args.ip,
+                      [args.level] if args.level is not None else [0, 1, 2, 3])
+
+    print("\nLOOT = fake creds returned · BLOCKED = app filter refused · "
+          "WAF-403 = WAF refused · FETCHED = fetched non-creds · "
+          "ERROR/REQ-ERR = fetch failed")
 
 
 if __name__ == "__main__":

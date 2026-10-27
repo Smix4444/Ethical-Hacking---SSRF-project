@@ -8,7 +8,7 @@ demonstrates SSRF against the lab app, organised along the **Cyber Kill Chain**.
 | File | Purpose |
 |------|---------|
 | `ssrf_payloads.py` | Generates alternate IP encodings and candidate URLs to **test the lab's own filters**. No network activity — it only transforms an address you pass in. |
-| `ssrf_scan.py` | Fires the payloads at the lab app's `/fetch` across levels L0–L3 and prints a BLOCKED/FETCHED/LOOT matrix. Talks **only** to the lab app you point it at. Standard library only. |
+| `ssrf_scan.py` | Fires the payloads at the lab app's `/fetch` across levels L0–L3 and prints a BLOCKED/FETCHED/LOOT matrix. Can also compare **no-WAF vs via-WAF**. Talks **only** to the lab app you point it at. Standard library only. |
 
 ### Generate payloads
 
@@ -32,6 +32,17 @@ python toolkit/ssrf_scan.py
 It scans every payload against L0, L1, L2 and L3 and prints a matrix, so the
 whole "which payload works at which level" table reproduces in one command.
 `LOOT` means the fake credentials came back.
+
+### Compare with vs without the WAF (Phase 4)
+
+```
+python toolkit/ssrf_scan.py --compare
+```
+
+Hits each payload directly (`--base`, default `:8088`, no WAF) and through the
+WAF edge (`--waf-base`, default `:8090`) at one level (default L0) and prints the
+two columns side by side. `WAF-403` means ModSecurity/CRS refused the request;
+anything else means it passed the WAF and reached the app.
 
 ## Planned capabilities (later phases)
 
