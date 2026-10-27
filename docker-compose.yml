@@ -6,7 +6,7 @@
 #
 #  Topology
 #  --------
-#    browser (host) ──:8080──▶ vulnerable-app (Flask, L0)
+#    browser (host) ──:8088──▶ vulnerable-app (Flask, L0)
 #                                     │  SSRF: the app fetches ANY URL you give it
 #                                     ▼
 #                         metadata-service @ 169.254.169.254:80
@@ -26,9 +26,10 @@ services:
     build: ./vulnerable-app
     container_name: ssrf-vulnerable-app
     ports:
-      # host 8080 -> container 5000. If 8080 is busy, change ONLY the left
-      # number (e.g. "8090:5000") and browse to that port instead.
-      - "8080:5000"
+      # host 8088 -> container 5000. Port 8080 is a very common clash (other
+      # local stacks grab it), so the lab defaults to 8088. If 8088 is also
+      # busy, change ONLY the left number (e.g. "9080:5000") and browse there.
+      - "8088:5000"
     networks:
       - ssrflab
     depends_on:

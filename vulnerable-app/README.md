@@ -38,7 +38,7 @@ From the repository root (not this folder):
 docker compose up --build
 ```
 
-Then open <http://localhost:8080>.
+Then open <http://localhost:8088>.
 
 > ⚠️ **Lab-only.** This service is deliberately insecure. Run it only on the
 > isolated local Docker network; never expose it to the internet.
