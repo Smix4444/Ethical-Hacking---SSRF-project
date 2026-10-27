@@ -8,8 +8,9 @@ demonstrates SSRF against the lab app, organised along the **Cyber Kill Chain**.
 | File | Purpose |
 |------|---------|
 | `ssrf_payloads.py` | Generates alternate IP encodings and candidate URLs to **test the lab's own filters**. No network activity — it only transforms an address you pass in. |
+| `ssrf_scan.py` | Fires the payloads at the lab app's `/fetch` across levels L0–L3 and prints a BLOCKED/FETCHED/LOOT matrix. Talks **only** to the lab app you point it at. Standard library only. |
 
-### Try it
+### Generate payloads
 
 ```
 python toolkit/ssrf_payloads.py 169.254.169.254
@@ -19,6 +20,18 @@ It prints the dotted-decimal, trailing-dot, decimal-integer, hex, dotted-hex,
 dotted-octal and IPv6-mapped forms of the address, each as a ready URL. These
 all point at the same host at the socket layer — which is why a filter that
 inspects the *text* of a URL (the L1 blocklist) can be fooled.
+
+### Reproduce the comparison table
+
+With the lab running (`docker compose up`), from the repo root:
+
+```
+python toolkit/ssrf_scan.py
+```
+
+It scans every payload against L0, L1, L2 and L3 and prints a matrix, so the
+whole "which payload works at which level" table reproduces in one command.
+`LOOT` means the fake credentials came back.
 
 ## Planned capabilities (later phases)
 
