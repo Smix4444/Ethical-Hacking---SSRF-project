@@ -1,0 +1,25 @@
+# ──────────────────────────────────────────────────────────────
+#  SSRF Lab — Python dependencies
+#
+#  Phase 0: intentionally empty. Nothing is installed yet.
+#  Dependencies are added per phase so it is always clear WHY each
+#  package is here. Uncomment a block when you start that phase.
+# ──────────────────────────────────────────────────────────────
+
+# ── Phase 1 · Vulnerable Flask app (vulnerable-app/) ──
+# flask>=3.0                 # the web framework for the target app
+# requests>=2.31             # the "sink": the server fetches a URL for us
+# gunicorn>=21.2             # production-style WSGI server
+
+# ── Phase 2 · Mock metadata service (metadata-service/) ──
+# flask>=3.0                 # tiny app that serves fake metadata/creds
+
+# ── Phase 4 · SSRF toolkit (toolkit/) ──
+# httpx>=0.27                # async HTTP client for faster scanning
+# click>=8.1                 # clean, documented CLI framework
+# rich>=13.7                 # readable terminal output / tables
+# pyyaml>=6.0                # payload and configuration files
+
+# ── Dev tooling (all phases) ──
+# pytest>=8.0                # tests for our own toolkit
+# ruff>=0.5                  # linter + formatter
