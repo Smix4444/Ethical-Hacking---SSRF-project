@@ -1,0 +1,85 @@
+# ──────────────────────────────────────────────────────────────
+#  SSRF Lab — .gitignore
+#  Keeps secrets, build output, Docker data and OS/IDE junk out of
+#  version control. Extra important because this repo lives in OneDrive.
+# ──────────────────────────────────────────────────────────────
+
+# ── Secrets & local credentials (NEVER commit real OR lab secrets) ──
+# Convention: commit *.example files, never the filled-in versions.
+.env
+.env.*
+!.env.example
+*.local.md
+credentials.local.md
+secrets/
+*.pem
+*.key
+*.p12
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# Test & type-check caches
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.cache/
+.mypy_cache/
+.ruff_cache/
+
+# ── Docker ──
+# We use NAMED volumes (Docker-managed, stored outside this repo),
+# never bind-mounted data folders inside it. Any stray runtime data
+# stays ignored so OneDrive never tries to sync gigabytes of it.
+docker-data/
+*.pid
+*.sock
+
+# ── Logs & captured output ──
+logs/
+*.log
+captures/
+loot/
+
+# ── OS junk ──
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+# macOS
+.DS_Store
+.AppleDouble
+# Linux
+*~
+.directory
+
+# ── Editors / IDEs ──
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# ── OneDrive / Office temp leftovers ──
+*.tmp
+*~RF*.TMP
