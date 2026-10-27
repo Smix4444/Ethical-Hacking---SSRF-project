@@ -18,10 +18,24 @@ match AWS's own *public documentation example* values, so they are unmistakably
 not real and authenticate to nothing.
 """
 import json
+import os
+import secrets
+import time
 
-from flask import Flask, Response
+from flask import Flask, Response, request
 
 app = Flask(__name__)
+
+# IMDS mode: "v1" (default, legacy — a plain GET returns everything) or "v2"
+# (token-required — a PUT must first obtain a session token, which is then sent
+# as a header on every read). Default v1 keeps the earlier phases working
+# unchanged; set IMDS_MODE=v2 in docker-compose to require the token dance.
+IMDS_MODE = os.environ.get("IMDS_MODE", "v1").strip().lower()
+
+# IMDSv2 session tokens we have issued: token -> expiry epoch seconds. FAKE.
+_ISSUED_TOKENS = {}
+TOKEN_TTL_HEADER = "X-aws-ec2-metadata-token-ttl-seconds"
+TOKEN_HEADER = "X-aws-ec2-metadata-token"
 
 # The IAM role "attached" to this fake instance.
 ROLE_NAME = "lab-ec2-demo-role"
@@ -70,11 +84,66 @@ def text(body, status=200):
     return Response(body, status=status, mimetype="text/plain")
 
 
+def _issue_token(ttl_seconds):
+    token = secrets.token_urlsafe(32)
+    _ISSUED_TOKENS[token] = time.time() + ttl_seconds
+    return token
+
+
+def _token_is_valid():
+    token = request.headers.get(TOKEN_HEADER)
+    if not token:
+        return False
+    expiry = _ISSUED_TOKENS.get(token)
+    if expiry is None:
+        return False
+    if time.time() > expiry:
+        _ISSUED_TOKENS.pop(token, None)
+        return False
+    return True
+
+
+@app.before_request
+def _enforce_imdsv2():
+    """In v2 mode, EVERY metadata read requires a valid session token (as AWS
+    IMDSv2 with HttpTokens=required does). A plain SSRF GET cannot supply one,
+    so the credential-theft chain breaks right here. In v1 mode: a no-op."""
+    if IMDS_MODE != "v2":
+        return None
+    path = request.path
+    if request.method == "GET" and (
+        path.startswith("/latest/meta-data") or path.startswith("/latest/dynamic")
+    ):
+        if not _token_is_valid():
+            return text(
+                "401 - Unauthorized. IMDSv2 requires a session token:\n"
+                f"  PUT /latest/api/token  with header '{TOKEN_TTL_HEADER}: 21600'\n"
+                f"  then resend the GET with header '{TOKEN_HEADER}: <token>'.\n",
+                status=401,
+            )
+    return None
+
+
+@app.route("/latest/api/token", methods=["PUT"])
+def imds_token():
+    """IMDSv2 token endpoint. Real IMDSv2 only answers to PUT and requires the
+    TTL header — exactly what a basic SSRF primitive (a plain GET of a URL)
+    cannot produce. The token is FAKE."""
+    ttl_raw = request.headers.get(TOKEN_TTL_HEADER)
+    if ttl_raw is None:
+        return text(f"400 - missing {TOKEN_TTL_HEADER} header\n", status=400)
+    try:
+        ttl = max(1, min(21600, int(ttl_raw)))
+    except ValueError:
+        return text("400 - invalid TTL\n", status=400)
+    return text(_issue_token(ttl))
+
+
 @app.route("/")
 def root():
     return text(
-        "FAKE cloud metadata service — SSRF Lab, lab-only.\n"
-        "Imitates AWS IMDSv1. All data below is invented.\n"
+        "FAKE cloud metadata service - SSRF Lab, lab-only.\n"
+        f"Active mode: IMDS{IMDS_MODE}. All data is invented.\n"
         "Try: /latest/meta-data/\n"
     )
 

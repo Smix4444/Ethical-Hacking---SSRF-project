@@ -48,6 +48,11 @@ services:
   metadata-service:
     build: ./metadata-service
     container_name: ssrf-metadata-service
+    environment:
+      # IMDS_MODE: "v1" (legacy, plain GET leaks creds — default, keeps earlier
+      # demos working) or "v2" (requires the PUT-token dance). Flip to "v2" to
+      # show the same SSRF failing against the token-protected endpoint.
+      IMDS_MODE: "v1"
     # NOTE: deliberately NO "ports:" — not reachable from the host, only via SSRF.
     networks:
       ssrflab:
