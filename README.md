@@ -110,6 +110,7 @@ a benign-looking hostname — exactly what happened at Capital One.
 | `loot` | Actions on Objectives | exfiltrate the (fake) IAM credentials |
 | `audit` | Defensive | check IMDSv1 vs IMDSv2 enforcement |
 | `rebind` | — | DNS rebinding: TOCTOU bypass (L2.5) vs L3 |
+| `report` | — | generate a professional pentest scorecard (HTML + Markdown) |
 | `full` | — | the whole chain as a guided demo |
 
 Details: [`toolkit/README.md`](toolkit/README.md).
@@ -130,6 +131,12 @@ python toolkit/ssrf_scan.py --compare # with vs without the WAF
 ```
 # full kill-chain, inside the lab network:
 docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
+```
+**Live dashboard** (SOC-style, self-contained): <http://localhost:8099>
+
+```
+# generate a professional pentest scorecard (HTML + Markdown) into reports/
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" -v "${PWD}/reports:/out" python:3.12-slim python /t/ssrfkit.py report --out /out
 ```
 ```
 docker compose down                   # stop & clean up
@@ -164,7 +171,9 @@ level it mirrors. **Research only; nothing real was attacked.**
 ├── redirector/         # lab "attacker redirect" host (L2 bypass)
 ├── oob-listener/       # out-of-band callback collector (blind SSRF)
 ├── dns-rebind/         # deterministic rebinding DNS (TOCTOU demo)
+├── dashboard/          # live SOC-style dashboard (host :8099)
 ├── toolkit/            # ssrfkit CLI + ssrf_payloads / ssrf_scan / imds_check
+├── reports/            # generated pentest scorecards (git-ignored)
 ├── docs/
 │   ├── TESTVERSLAG.md  # live end-to-end test report (evidence)
 │   └── research/       # reality dossier: Capital One + real CVEs

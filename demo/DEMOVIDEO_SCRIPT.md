@@ -119,6 +119,29 @@ commando je typt*, *wat je zegt* (NL spreektekst), en *wat de kijker ziet*.
 - **Kijker ziet:** `A query #1 -> 1.1.1.1`, `A query #2 -> 169.254.169.254`;
   L2.5 = LOOT, L3 = BLOCKED.
 
+## 6c · Finale — live dashboard + pentestrapport (~1.5 min)
+- **Toon:** de browser op **http://localhost:8099** (het dashboard).
+- **Zeg:** "Om alles samen te brengen heb ik een live dashboard gebouwd. Hier zie
+  je de topologie van het lab met alle services groen/up."
+- **Doe:** kies niveau **L0** en klik **🚀 Launch SSRF**.
+- **Kijker ziet:** het pad app→metadata kleurt **rood** ("LOOT"), de teller
+  "credentials exfiltrated" springt omhoog.
+- **Doe:** zet op **L3** en klik opnieuw.
+- **Kijker ziet:** het pad wordt **groen/BLOCKED** met de reden. "Zelfde aanval,
+  andere verdediging — visueel het verschil."
+- **Doe:** klik **Run** bij de matrix, de WAF-vergelijking en de rebind-panel.
+- **Kijker ziet:** de gekleurde L0-L3-matrix (rood=LOOT, groen=BLOCKED), de
+  WAF-kolommen, en de rebind-flip (query #1 veilig → query #2 intern).
+- **Zeg + commando (terminal):** "En als pentester lever je een rapport. Dit
+  commando test het hele lab en genereert een professionele scorecard."
+  ```powershell
+  docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" -v "${PWD}/reports:/out" python:3.12-slim python /t/ssrfkit.py report --out /out
+  ```
+- **Doe:** open **`reports/report.html`** in de browser.
+- **Kijker ziet:** een nette pentest-scorecard met executive summary, bevindingen
+  met severity, bewijs, remediation, en de MITRE ATT&CK-mapping. "Dit is wat een
+  consultant zou opleveren — gegenereerd uit echte testdata van mijn lab."
+
 ## 7 · Afsluiten (~45s)
 - **Zeg:** "Samengevat: SSRF lukt moeiteloos zonder verdediging, filters en zelfs
   een WAF zijn te omzeilen, en enkel correcte validatie (resolve-then-pin) plus

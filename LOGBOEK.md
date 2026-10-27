@@ -26,7 +26,41 @@ welke mitigatie illustreert dit?>
 
 ---
 
-## [0009] — 2026-10-28 — DNS rebinding live: TOCTOU valt, resolve-then-pin houdt (Fase 8)
+## [0010] — 2026-10-28 — Zichtbaar & leverbaar: dashboard + pentestrapport (Fase 9)
+
+**Fase:** 9
+
+**Wat probeerde ik?**
+De bestaande diepgang *tonen* i.p.v. enkel bewijzen: (A) een live, self-contained
+dashboard (eigen service op poort 8099) dat de topologie, de L0-L3-matrix, de
+WAF-vergelijking, de rebind-flip en de IMDS-audit visueel maakt — read-only by
+default, aanvallen enkel op een knop; en (B) een `ssrfkit report`-subcommando dat
+het hele lab aftest en een professioneel pentest-rapport (HTML + Markdown)
+genereert met severity, bewijs, remediation en MITRE ATT&CK-mapping. Beide
+hergebruiken de bestaande toolkit/endpoints (geen duplicatie). Live geverifieerd;
+regressietest bevestigde dat L0-L3 onveranderd zijn.
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Dat de *laatste 20%* — presentatie — vaak bepaalt of werk overkomt. De techniek
+was al af, maar een gekleurde matrix, een pad dat rood oplicht bij "LOOT" en
+groen bij "BLOCKED", en een rapport met een executive summary maken in één
+oogopslag duidelijk wat tien logboek-entries uitleggen. Technisch leerde ik ook
+iets: door de backend de bestaande `ssrf_scan`/`imds_check`-functies te laten
+*importeren* (read-only gemount) en gewoon als JSON te serveren, kreeg ik een
+"levend" dashboard zonder één regel aanvalslogica te dupliceren — dezelfde
+waarheid, andere weergave. En door read-only als default te houden en aanvallen
+achter een knop te zetten, blijft zelfs een demo-tool netjes binnen het
+lab-only-principe.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit is exact wat een security consultant oplevert: niet "ik heb het gehackt",
+maar een **scorecard** met risico's, bewijs, remediation en een mapping op
+erkende frameworks (Cyber Kill Chain + MITRE ATT&CK T1552.005). De scoretabel
+"welke laag stopt welke aanval" vertaalt het hele project naar de taal van
+risicobeheer — precies de brug tussen offensief onderzoek en bruikbare
+verdedigingsadviezen. Daarmee is het lab niet alleen een PoC maar een volledig,
+presenteerbaar en leverbaar geheel.
+
 
 **Fase:** 8
 
