@@ -9,6 +9,7 @@ demonstrates SSRF against the lab app, organised along the **Cyber Kill Chain**.
 |------|---------|
 | `ssrf_payloads.py` | Generates alternate IP encodings and candidate URLs to **test the lab's own filters**. No network activity — it only transforms an address you pass in. |
 | `ssrf_scan.py` | Fires the payloads at the lab app's `/fetch` across levels L0–L3 and prints a BLOCKED/FETCHED/LOOT matrix. Can also compare **no-WAF vs via-WAF**. Talks **only** to the lab app you point it at. Standard library only. |
+| `imds_check.py` | Audit-style check: probes a metadata endpoint with a plain IMDSv1 GET **and** the IMDSv2 PUT-token flow, and reports which mode it enforces. Standard library only. |
 
 ### Generate payloads
 
@@ -43,6 +44,19 @@ Hits each payload directly (`--base`, default `:8088`, no WAF) and through the
 WAF edge (`--waf-base`, default `:8090`) at one level (default L0) and prints the
 two columns side by side. `WAF-403` means ModSecurity/CRS refused the request;
 anything else means it passed the WAF and reached the app.
+
+### Check IMDSv1 vs IMDSv2 (Phase 5)
+
+The metadata service has no host port, so run the checker from **inside** the
+lab network with the lab running. From the repo root:
+
+```
+docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/imds_check.py http://169.254.169.254
+```
+
+It reports whether the endpoint leaks creds to a plain GET (IMDSv1) or enforces
+the token dance (IMDSv2). Flip `IMDS_MODE` on the `metadata-service` in
+`docker-compose.yml` (`v1` ↔ `v2`) and re-run to see the difference.
 
 ## Planned capabilities (later phases)
 
