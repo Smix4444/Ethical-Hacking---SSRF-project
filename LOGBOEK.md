@@ -26,6 +26,41 @@ welke mitigatie illustreert dit?>
 
 ---
 
+## [0002] — 2026-10-27 — Eerste end-to-end SSRF naar metadata (Fase 1)
+
+**Fase:** 1
+
+**Wat probeerde ik?**
+Eén volledige SSRF-aanval op het makkelijkste niveau (L0) laten draaien, zonder
+enige bescherming. Concreet: een kwetsbare Flask-app ("URL Preview Service")
+gebouwd die een door mij opgegeven URL *server-side* ophaalt; een mock
+AWS-metadata-service die op het nagebootste `169.254.169.254` nep IAM-credentials
+teruggeeft; en een `docker-compose.yml` die beide op één geïsoleerd Docker-netwerk
+(`169.254.169.0/24`) start. Daarna via de browser de metadata uitgelezen en de
+nep-credentials "buitgemaakt".
+
+**Wat gebeurde er / wat snap ik nu pas? (het inzicht)**
+Dat de kracht van SSRF niet in de app zelf zit, maar in *wie* het verzoek doet.
+Vanaf mijn host kan ik `169.254.169.254` niet bereiken (de metadata-service heeft
+bewust geen gepubliceerde poort). Maar ik hoef er ook niet bij — ik laat de
+*server* het voor me doen. De app wordt mijn proxy naar het interne netwerk. Eén
+onschuldig ogende feature ("haal even een preview van deze link op") geeft zo
+toegang tot een endpoint dat voor de buitenwereld onzichtbaar hoort te zijn. En
+IMDSv1 vraagt geen enkele authenticatie: één GET en de tijdelijke sleutels liggen
+op straat.
+
+**Waarom is dit belangrijk? (koppeling echte wereld / verdediging)**
+Dit is exact het patroon van de **Capital One-breach (2019)**: een SSRF in een
+webtoepassing bereikte het EC2-metadata-endpoint, las de IAM-credentials van de
+instance, en die werden gebruikt om data uit S3-buckets te halen (~100 miljoen
+klantgegevens). De les voor verdediging die nu al zichtbaar wordt: vertrouw nooit
+een door de gebruiker opgegeven URL die de server zelf ophaalt, en behandel
+`169.254.169.254` als een te beschermen *interne* asset (netwerksegmentatie,
+IMDSv2 met token, egress-filtering). Precies die verdedigingen bouwen we in de
+volgende fases als L1–L3 + WAF.
+
+---
+
 ## [0001] — 2026-10-27 — Projectskelet & ethiek (Fase 0)
 
 **Fase:** 0
