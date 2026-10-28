@@ -132,6 +132,12 @@ python toolkit/ssrf_scan.py --compare # with vs without the WAF
 # full kill-chain, inside the lab network:
 docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-slim python /t/ssrfkit.py full
 ```
+
+Or just open the **interactive menu** (easiest):
+
+```powershell
+./ssrfkit.ps1          # numbered menu; or ./ssrfkit.ps1 audit to run one step
+```
 **Live dashboard** (SOC-style, self-contained): <http://localhost:8099>
 
 ```

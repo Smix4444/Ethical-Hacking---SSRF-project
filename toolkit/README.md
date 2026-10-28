@@ -20,6 +20,20 @@ docker run --rm --network ssrf-lab_ssrflab -v "${PWD}/toolkit:/t" python:3.12-sl
 
 Swap `full` for any subcommand. Standard library only — no installs needed.
 
+### Easiest: the interactive menu
+
+From the repo root (lab running), just:
+
+```powershell
+./ssrfkit.ps1
+```
+
+(or `ssrfkit.bat` on cmd.exe). This opens a numbered **menu** — pick 1–8 to run
+any step, `0` to exit. Run a subcommand directly by passing it: `./ssrfkit.ps1 audit`.
+The launcher uses `docker run -it` so the menu can read your input. Running
+`ssrfkit.py` with no arguments (or `menu`) opens the same menu; every existing
+subcommand keeps working unchanged.
+
 ### Subcommands → Cyber Kill Chain
 
 | Subcommand | Kill-chain stage | What it does |
