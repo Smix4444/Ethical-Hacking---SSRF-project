@@ -436,6 +436,72 @@ def cmd_full(args):
 
 
 # --------------------------------------------------------------------------- #
+#  Interactive menu (a friendly front-end that reuses the cmd_* functions)      #
+# --------------------------------------------------------------------------- #
+
+def _menu_args():
+    """Build an args Namespace with the same defaults the subcommands use."""
+    return argparse.Namespace(
+        app=DEFAULTS["app"], waf=DEFAULTS["waf"], oob=DEFAULTS["oob"],
+        metadata=DEFAULTS["metadata"], metadata_ip=DEFAULTS["metadata_ip"],
+        dns=DEFAULTS["dns"], rebind_host=DEFAULTS["rebind_host"],
+        level=0, out="reports", no_color=False)
+
+
+def run_menu():
+    items = [
+        ("1", "Recon", "detect SSRF (incl. blind/OOB)", cmd_recon, None),
+        ("2", "Weaponize", "generate bypass payloads", cmd_weaponize, None),
+        ("3", "Exploit", "fire payloads (with/without WAF)", cmd_exploit, "level"),
+        ("4", "Loot", "grab the IAM credentials", cmd_loot, "level"),
+        ("5", "Audit", "IMDSv1 vs IMDSv2", cmd_audit, None),
+        ("6", "Rebind", "DNS rebinding (L2.5 vs L3)", cmd_rebind, None),
+        ("7", "Full", "full kill chain", cmd_full, None),
+        ("8", "Report", "generate pentest scorecard", cmd_report, "out"),
+    ]
+    while True:
+        print(_c("\n=== SSRFKIT — SSRF kill-chain toolkit (LAB-ONLY) ===", "1;36"))
+        for key, name, desc, _f, _o in items:
+            print(f"  {key}) {name:<10} — {desc}")
+        print("  0) Exit")
+        try:
+            choice = input(_c("Choice > ", "1;36")).strip()
+        except EOFError:
+            print()
+            return
+        if choice == "0":
+            print("bye.")
+            return
+        match = next((it for it in items if it[0] == choice), None)
+        if not match:
+            print(_c("  invalid choice — pick a number 0-8.", "1;33"))
+            continue
+        _k, _n, _d, func, opt = match
+        args = _menu_args()
+        try:
+            if opt == "level":
+                raw = input("  Defense level 0-3 [0]: ").strip()
+                args.level = int(raw) if raw in ("0", "1", "2", "3") else 0
+            elif opt == "out":
+                default_out = "/out" if os.path.isdir("/out") else "reports"
+                raw = input(f"  Output dir [{default_out}]: ").strip()
+                args.out = raw or default_out
+            func(args)
+        except EOFError:
+            print()
+            return
+        except KeyboardInterrupt:
+            print("\n  cancelled.")
+        except Exception as exc:  # noqa: BLE001 — never crash the menu
+            print(_c(f"  error: {type(exc).__name__}: {exc}", "1;31"))
+        try:
+            input(_c("\n  [enter] back to menu ", "90"))
+        except EOFError:
+            print()
+            return
+
+
+# --------------------------------------------------------------------------- #
 #  CLI                                                                          #
 # --------------------------------------------------------------------------- #
 
@@ -473,9 +539,15 @@ def build_parser():
 
 
 def main():
-    args = build_parser().parse_args()
+    global _USE_COLOR
+    argv = sys.argv[1:]
+    # No arguments (or "menu") opens the interactive menu; everything else keeps
+    # working exactly as before (scripting / the existing demo commands).
+    if not argv or argv[0] == "menu":
+        run_menu()
+        return
+    args = build_parser().parse_args(argv)
     if args.no_color:
-        global _USE_COLOR
         _USE_COLOR = False
     args.func(args)
 
